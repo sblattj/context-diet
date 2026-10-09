@@ -1,6 +1,6 @@
 # Skill-trigger A/B pipeline
 
-Measures whether a skill-visibility change (for example moving skills to `name-only` in `skillOverrides`) still lets the model pick the right skill, using **real prompts mined from your own session logs**. Part of the context-diet kit (see [docs/CONTEXT-DIET.md](../../docs/CONTEXT-DIET.md), issue #118). Python 3.9+, standard library only. Order: mine, filter, make_arms, synth (optional), run, report.
+Measures whether a skill-visibility change (for example moving skills to `name-only` in `skillOverrides`) still lets the model pick the right skill, using **real prompts mined from your own session logs**. Part of the context-diet kit (see [docs/CONTEXT-DIET.md](../docs/CONTEXT-DIET.md)). Python 3.9+, standard library only. Order: mine, filter, make_arms, synth (optional), run, report.
 
 ```
 transcripts --mine.py--> candidates.jsonl --filter.py--> cases.jsonl --run.py--> results.jsonl --report.py--> tables
@@ -14,7 +14,7 @@ Every model call is `claude -p ...` in a subprocess. With `ANTHROPIC_API_KEY` se
 ## Walkthrough
 
 ```sh
-cd context-diet/ab
+cd ab
 
 # 1. Mine. Pass your transcript dir as an argument (nothing is hardcoded).
 python3 mine.py "$HOME/.claude/projects" --out work/candidates.jsonl --days 30 --max-negatives 150
@@ -32,7 +32,7 @@ Mined negatives are noisy (some no-skill turns *should* have used a skill): rela
 python3 synth.py work/cases.jsonl --skills-dir "$HOME/.claude/skills" --arms work/arms/*.json \
     --min-positives 1 --per-skill 2 --model haiku
 ```
-Appends `"synthetic": true` positives (same schema, `explicit: false`) to `cases.jsonl`, generated from each skill's name and description through the same `claude -p` path as `filter.py` (haiku, deadline, key stripped). Prompts that name the skill, duplicates of existing cases, and skills hidden from the model (`user-invocable-only`/`off` in any `--arms` file, or `disable-model-invocation: true`) are skipped. The issue gives only a total (14), so `--min-positives` defaults to 1 and `--per-skill` to 2; both are flags. `--dry-run` lists what would be generated. Run it after `make_arms.py` so `--arms` exists, and re-run `run.py` afterwards (it only runs the new cases). `report.py` excludes synthetic cases by default (`--synthetic include|only` to change) and prints their recall on a separate line, so real recall is not inflated.
+Appends `"synthetic": true` positives (same schema, `explicit: false`) to `cases.jsonl`, generated from each skill's name and description through the same `claude -p` path as `filter.py` (haiku, deadline, key stripped). Prompts that name the skill, duplicates of existing cases, and skills hidden from the model (`user-invocable-only`/`off` in any `--arms` file, or `disable-model-invocation: true`) are skipped. `--min-positives` defaults to 1 and `--per-skill` to 2. `--dry-run` lists what would be generated. Run it after `make_arms.py` so `--arms` exists, and re-run `run.py` afterwards (it only runs the new cases). `report.py` excludes synthetic cases by default (`--synthetic include|only` to change) and prints their recall on a separate line, so real recall is not inflated.
 
 ```sh
 # 3. Arms: complete skillOverrides maps; each arm pins every skill explicitly. First --arm = baseline.
@@ -66,6 +66,18 @@ Runs = cases x arms x reps. The issue's reference run (98 cases, 2 arms, 2 reps)
 ## Tests
 
 ```sh
-python3 -m unittest discover -s context-diet/ab/tests
+python3 -m unittest discover -s ab/tests
 ```
 Synthetic transcripts and a fake `claude` binary on `PATH`; no network or credits.
+
+## Rename arms: does a better NAME help a name-only skill?
+
+For a `name-only` skill the name is all the model sees. `make_rename_arms.py` builds an arm where chosen skills get new names (copies installed as project skills in a per-arm run dir, originals set to `off`); `run.py` runs that arm in its dir and maps fired names back, so `report.py` compares on the original names.
+
+```sh
+echo '{"boil-the-ocean": "going-all-in-or-about-to-claim-done"}' > renames.json
+python3 make_rename_arms.py --skills-dir ~/.claude/skills --base arms/before.json --rename renames.json --name renamed --out arms
+python3 run.py --arms arms/before.json arms/renamed.json --cases work/cases.jsonl --reps 3
+```
+
+Write the test prompts from the SKILL.md with a writer that never sees the new names, or the arm wins by construction. Measured once (7 opaque names, 35 fresh prompts x 3 reps): recall 49% -> 90%, McNemar p < 0.0001, other skills flat. A `use-this-skill-when-` prefix (`--prefix`) gained nothing over the same names and cost ~300 start tokens.
