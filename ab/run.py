@@ -12,6 +12,10 @@ A tailable progress log goes to --progress (default: <out>.progress).
 Positives whose expected skills are all `user-invocable-only`/`off` in an arm are
 excluded by design (recorded with excluded=true, no call made).
 
+Rename arms (make_rename_arms.py) add ARM.meta.json next to ARM.json:
+{"cwd": dir whose .claude/skills holds renamed copies, "rename": {new: old}}.
+Runs use that cwd, and fired names are mapped back to the original names.
+
 Billing: strips ANTHROPIC_API_KEY from the child env so the subscription is used
 (--keep-api-key to disable). Each call has a wall-clock --deadline.
 """
@@ -83,10 +87,26 @@ def arm_state(arm_path, skill):
     return "on"
 
 
+def load_meta(arm_path):
+    """Optional ARM.meta.json beside ARM.json (rename arms): {"cwd": ..., "rename": {new: old}}."""
+    mp = arm_path[:-5] + ".meta.json" if arm_path.endswith(".json") else arm_path + ".meta.json"
+    if not os.path.exists(mp):
+        return {}
+    with open(mp) as fh:
+        return json.load(fh)
+
+
+def unrename(skills, meta):
+    """Map fired (possibly renamed, possibly plugin-prefixed) names back to original names."""
+    ren = meta.get("rename") or {}
+    return [ren.get(s.split(":")[-1], s) for s in skills]
+
+
 def is_excluded(case, arm_path):
     exp = case.get("skills") or []
+    fwd = {old: new for new, old in (load_meta(arm_path).get("rename") or {}).items()}
     return (case.get("label") == "positive" and exp
-            and all(arm_state(arm_path, s) in ("user-invocable-only", "off") for s in exp))
+            and all(arm_state(arm_path, fwd.get(s, s)) in ("user-invocable-only", "off") for s in exp))
 
 
 def done_keys(out_path, keep_errors):
@@ -112,15 +132,16 @@ def run_one(case, arm, arm_path, rep, opts, arm_idx=0):
         rec.update(excluded=True, skills=[], start_tokens=None)
         return rec
     t0 = time.time()
+    meta = load_meta(arm_path)
     try:
         out, _rc = _claude.run_claude(
             build_args(case["prompt"], arm_path, opts.model, opts.max_turns, opts.tools),
-            deadline=opts.deadline, cwd=opts.cwd, strip_api_key=not opts.keep_api_key,
+            deadline=opts.deadline, cwd=meta.get("cwd") or opts.cwd, strip_api_key=not opts.keep_api_key,
             claude_bin=opts.claude_bin)
         p = parse_stream(out)
         if not p["result_ok"] and not p["skills"] and p["start_tokens"] is None:
             raise _claude.ClaudeError("no usable stream output: %r" % out[:200])
-        rec.update(skills=p["skills"], start_tokens=p["start_tokens"], num_turns=p["num_turns"])
+        rec.update(skills=unrename(p["skills"], meta), start_tokens=p["start_tokens"], num_turns=p["num_turns"])
     except Exception as e:  # noqa: BLE001 - record and continue
         rec.update(error=str(e)[:300], skills=[], start_tokens=None)
     rec["secs"] = round(time.time() - t0, 1)
@@ -149,7 +170,7 @@ def main(argv=None):
     arm_files = []
     for p in a.arms:
         if os.path.isdir(p):
-            names = sorted(f[:-5] for f in os.listdir(p) if f.endswith(".json"))
+            names = sorted(f[:-5] for f in os.listdir(p) if f.endswith(".json") and not f.endswith(".meta.json"))
             order = os.path.join(p, "order.txt")  # written by make_arms.py
             if os.path.exists(order):
                 with open(order, encoding="utf-8") as fh:

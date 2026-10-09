@@ -47,8 +47,11 @@ def _text_of(content):
     return ""
 
 
-def scan_transcript(path, stats):
-    """Accumulate counts from one .jsonl transcript into stats[skill]."""
+def scan_transcript(path, stats, include_headless=False):
+    """Accumulate counts from one .jsonl transcript into stats[skill].
+
+    Headless runs (entrypoint other than "cli", e.g. `claude -p` A/B or eval runs) are
+    skipped by default: they would count test traffic as real usage."""
     try:
         f = open(path, encoding="utf-8", errors="replace")
     except OSError:
@@ -62,6 +65,9 @@ def scan_transcript(path, stats):
             except ValueError:
                 continue
             if not isinstance(ev, dict):
+                continue
+            ep = ev.get("entrypoint")
+            if ep and ep != "cli" and not include_headless:
                 continue
             ts = ev.get("timestamp") or ""
             msg = ev.get("message") if isinstance(ev.get("message"), dict) else {}
@@ -145,6 +151,8 @@ def main(argv=None):
     ap.add_argument("--cap", type=int, default=600, help="description+when_to_use cap (default 600)")
     ap.add_argument("--now", help="ISO timestamp to treat as now (for reproducible runs)")
     ap.add_argument("-o", "--output", help="write CSV here instead of stdout")
+    ap.add_argument("--include-headless", action="store_true",
+                    help="also count `claude -p` / SDK runs (default: interactive sessions only)")
     a = ap.parse_args(argv)
 
     root = a.projects_dir or default_projects_dir()
@@ -160,7 +168,7 @@ def main(argv=None):
 
     stats = {}
     for p in find_transcripts(root):
-        scan_transcript(p, stats)
+        scan_transcript(p, stats, a.include_headless)
     rows = build_rows(stats, load_skills(a.skills_dir or default_skill_dirs()),
                       now, a.window_days, a.cap)
     out = open(a.output, "w", newline="") if a.output else sys.stdout

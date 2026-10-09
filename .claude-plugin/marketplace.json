@@ -1,0 +1,16 @@
+{
+  "name": "context-diet",
+  "owner": {
+    "name": "sblattj"
+  },
+  "plugins": [
+    {
+      "name": "context-diet",
+      "source": "./",
+      "description": "Measure and cut Claude Code's starting context without breaking skill pick-up."
+    }
+  ],
+  "metadata": {
+    "description": "Tools to measure and cut what Claude Code loads before your first prompt."
+  }
+}

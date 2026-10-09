@@ -12,7 +12,8 @@ import contextlib
 
 HERE = os.path.dirname(os.path.abspath(__file__))
 KIT = os.path.dirname(HERE)
-sys.path.insert(0, KIT)
+sys.path.insert(0, os.path.join(KIT, "measure"))
+sys.path.insert(0, os.path.join(KIT, "audit"))
 sys.path.insert(0, HERE)
 
 import ablate_row  # noqa: E402
@@ -26,7 +27,7 @@ def slurp(path):
 
 
 def load(name, file):
-    spec = importlib.util.spec_from_file_location(name, os.path.join(KIT, file))
+    spec = importlib.util.spec_from_file_location(name, os.path.join(KIT, "audit", file))
     mod = importlib.util.module_from_spec(spec)
     spec.loader.exec_module(mod)
     return mod
@@ -108,7 +109,7 @@ class AblateScriptTests(TmpCase):
     def run_script(self, *args):
         env = dict(os.environ, CLAUDE_BIN=self.fake_claude(), FAKE_ARGS_DIR=self.tmp,
                    ANTHROPIC_API_KEY="secret")
-        return subprocess.run(["/bin/bash", os.path.join(KIT, "ablate.sh")] + list(args),
+        return subprocess.run(["/bin/bash", os.path.join(KIT, "measure", "ablate.sh")] + list(args),
                               env=env, capture_output=True, text=True)
 
     def test_writes_one_jsonl_per_variant(self):
@@ -194,6 +195,21 @@ class SkillUsageTests(TmpCase):
         self.assertEqual(rows["longy"]["description_length"], "700")
         self.assertEqual(rows["longy"]["suggested_tier"], "trim")
 
+    def test_headless_runs_skipped_by_default(self):
+        proj = os.path.join(self.tmp, "hp")
+        skills = os.path.join(self.tmp, "hs")
+        ab = fx.skill_call("alpha", "2026-01-30T10:00:00Z")
+        ab["entrypoint"] = "sdk-cli"
+        real = fx.skill_call("alpha", "2026-01-29T10:00:00Z")
+        real["entrypoint"] = "cli"
+        fx.write_jsonl(os.path.join(proj, "a", "s.jsonl"), [ab, real])
+        fx.write_skill(skills, "alpha", "Short.")
+        for extra, want in (([], "1"), (["--include-headless"], "2")):
+            rc, out, err = self.run_main(usage, [proj, "--skills-dir", skills, "--now", NOW] + extra)
+            self.assertEqual(rc, 0, err)
+            rows = {r["skill"]: r for r in csv.DictReader(io.StringIO(out))}
+            self.assertEqual(rows["alpha"]["model_invocations"], want)
+
     def test_missing_dir(self):
         rc, _, err = self.run_main(usage, [os.path.join(self.tmp, "nope")])
         self.assertEqual(rc, 2)
@@ -236,7 +252,7 @@ class SkillLintTests(TmpCase):
 
 class LeanAgentTests(unittest.TestCase):
     def test_lean_agent_frontmatter(self):
-        sk = skill_meta.read_skill(os.path.join(os.path.dirname(KIT), "agents", "lean.md"))
+        sk = skill_meta.read_skill(os.path.join(KIT, "agents", "lean.md"))
         self.assertEqual(sk["meta"]["name"], "lean")
         tools = [t.strip() for t in sk["meta"]["tools"].split(",")]
         self.assertEqual(tools, ["Bash", "Read", "Edit", "Write", "Grep", "Glob"])
