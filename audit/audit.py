@@ -19,7 +19,6 @@ but skillOverrides still works on them; check the skill_listing block (measure/s
 <config> is $CLAUDE_CONFIG_DIR if set, else ~/.claude.
 """
 import argparse
-import csv
 import glob
 import json
 import os
@@ -31,6 +30,7 @@ sys.path.insert(0, os.path.dirname(os.path.realpath(__file__)))
 sys.path.insert(0, os.path.join(os.path.dirname(os.path.dirname(os.path.realpath(__file__))), "lib"))
 import ccpaths  # noqa: E402
 import skill_meta  # noqa: E402
+import usage_csv  # noqa: E402
 
 HIDDEN = ("user-invocable-only", "off")
 
@@ -60,7 +60,11 @@ def main(argv=None):
     sp = os.path.expanduser(a.settings or ccpaths.config_path("settings.json"))
     sd = os.path.expanduser(a.skills_dir or ccpaths.config_path("skills"))
     ov = json.load(open(sp)).get("skillOverrides", {}) if os.path.exists(sp) else {}
-    use = {r["skill"]: r for r in csv.DictReader(open(a.usage_csv))}
+    try:
+        use = usage_csv.load_usage(a.usage_csv)
+    except usage_csv.UsageSchemaError as e:
+        print(e, file=sys.stderr)
+        return 2
     now, rows, over, listed = time.time(), [], [], {}
     for f in sorted(glob.glob(os.path.join(sd, "*", "SKILL.md"))):
         d = os.path.dirname(f)
@@ -69,7 +73,7 @@ def main(argv=None):
         st = os.stat(d)
         age = (now - getattr(st, "st_birthtime", st.st_mtime)) / 86400
         r = use.get(name, {})
-        model, typed = int(r.get("model_invocations") or 0), int(r.get("typed_invocations") or 0)
+        model, typed = r.get("model_invocations", 0), r.get("typed_invocations", 0)
         cur = ov.get(name, "on")
         sug = suggest(model, typed, cur, name in ov, age, a.rare, a.new_days)
         if sug != cur:

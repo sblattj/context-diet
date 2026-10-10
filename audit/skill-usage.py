@@ -7,6 +7,10 @@ counts with the skills found on disk to write a CSV:
 
   skill,model_invocations,typed_invocations,invocations,last_used,description_length,suggested_tier
 
+plus, unless --no-legacy-columns, the deprecated aliases `auto_tool_use` and
+`typed_slash` (schema 1 names) so older readers keep working. Read the file with
+`usage_csv.load_usage()` rather than by column name.
+
 Tiers (see docs/CONTEXT-DIET.md):
   keep                 used in the window; listing is within the length cap
   trim                 used in the window but description+when_to_use exceeds the cap
@@ -33,10 +37,10 @@ sys.path.insert(0, os.path.dirname(os.path.realpath(__file__)))
 sys.path.insert(0, os.path.join(os.path.dirname(os.path.dirname(os.path.realpath(__file__))), "lib"))
 import ccpaths  # noqa: E402
 import skill_meta  # noqa: E402
+import usage_csv  # noqa: E402
 
 CMD_RE = re.compile(r"<command-name>\s*/?([^<\s]+)\s*</command-name>")
-HEADER = ["skill", "model_invocations", "typed_invocations", "invocations",
-          "last_used", "description_length", "suggested_tier"]
+HEADER = usage_csv.HEADER
 
 
 def default_projects_dir():
@@ -163,6 +167,8 @@ def main(argv=None):
     ap.add_argument("-o", "--output", help="write CSV here instead of stdout")
     ap.add_argument("--include-headless", action="store_true",
                     help="also count `claude -p` / SDK runs (default: interactive sessions only)")
+    ap.add_argument("--no-legacy-columns", action="store_true",
+                    help="omit the deprecated auto_tool_use/typed_slash alias columns")
     ccpaths.add_scope_args(ap)
     a = ap.parse_args(argv)
 
@@ -189,8 +195,9 @@ def main(argv=None):
                       now, a.window_days, a.cap)
     out = open(a.output, "w", newline="") if a.output else sys.stdout
     w = csv.writer(out, lineterminator="\n")
-    w.writerow(HEADER)
-    w.writerows(rows)
+    legacy = not a.no_legacy_columns
+    w.writerow(usage_csv.header(legacy))
+    w.writerows(usage_csv.alias_row(r) if legacy else r for r in rows)
     if a.output:
         out.close()
     return 0
