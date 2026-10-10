@@ -230,6 +230,21 @@ class SkillLintTests(TmpCase):
         self.assertIn("## More triggers", out)
         self.assertIn("3 skill(s) checked, 2 over the cap", out)
 
+    def test_settings_skip_not_fully_listed(self):
+        root = os.path.join(self.tmp, "skills")
+        fx.write_skill(root, "listed", "x" * 700)
+        fx.write_skill(root, "quiet", "x" * 700)
+        fx.write_skill(root, "hidden", "x" * 700)
+        st = os.path.join(self.tmp, "settings.json")
+        with open(st, "w") as f:
+            json.dump({"skillOverrides": {"quiet": "name-only", "hidden": "user-invocable-only", "listed": "on"}}, f)
+        rc, out, _ = self.run_main(lint, [root, "--settings", st])
+        self.assertEqual(rc, 1)
+        self.assertIn("/listed/", out)
+        self.assertNotIn("/quiet/", out)
+        self.assertNotIn("/hidden/", out)
+        self.assertIn("1 skill(s) checked, 1 over the cap, 2 skipped", out)
+
     def test_boundary_is_inclusive(self):
         root = os.path.join(self.tmp, "skills")
         fx.write_skill(root, "edge", "x" * 600)

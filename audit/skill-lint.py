@@ -5,10 +5,14 @@ Every skill's description and when_to_use are loaded into every prompt, so long
 trigger lists are a recurring token cost. Overflow belongs in a `## More
 triggers` section in the skill body, which loads only when the skill fires.
 
+With --settings, skills whose skillOverrides state is not "on" (name-only,
+user-invocable-only, off) are skipped: their description is never loaded.
+
 Exit status: 0 clean, 1 violations found, 2 usage error.
 """
 import argparse
 import glob
+import json
 import os
 import sys
 
@@ -37,6 +41,15 @@ def collect(paths):
     return uniq
 
 
+def load_overrides(path):
+    with open(os.path.expanduser(path), encoding="utf-8") as fh:
+        return json.load(fh).get("skillOverrides") or {}
+
+
+def skill_name(path, meta):
+    return (meta or {}).get("name") or os.path.basename(os.path.dirname(path))
+
+
 def lint_file(path, cap):
     """Return a violation dict or None."""
     sk = skill_meta.read_skill(path)
@@ -59,13 +72,21 @@ def main(argv=None):
     ap.add_argument("paths", nargs="+", help="SKILL.md files or directories to scan")
     ap.add_argument("--cap", type=int, default=DEFAULT_CAP,
                     help="max description+when_to_use chars (default %d)" % DEFAULT_CAP)
+    ap.add_argument("--settings", metavar="SETTINGS_JSON",
+                    help="skip skills this file's skillOverrides doesn't fully list (e.g. ~/.claude/settings.json)")
     a = ap.parse_args(argv)
+    overrides = load_overrides(a.settings) if a.settings else {}
     files = collect(a.paths)
     if not files:
         print("no SKILL.md files found", file=sys.stderr)
         return 2
-    bad = 0
+    bad = skipped = 0
     for f in files:
+        if overrides:
+            sk = skill_meta.read_skill(f)
+            if overrides.get(skill_name(f, sk and sk["meta"]), "on") != "on":
+                skipped += 1
+                continue
         v = lint_file(f, a.cap)
         if v is None:
             continue
@@ -79,7 +100,8 @@ def main(argv=None):
             print("  suggestion: shorten the description; extra trigger phrases can go in the existing '## More triggers' section")
         else:
             print("  suggestion: keep the first sentence(s) in the description and move the extra trigger phrases to a '## More triggers' section in the body")
-    print("%d skill(s) checked, %d over the cap" % (len(files), bad))
+    print("%d skill(s) checked, %d over the cap" % (len(files) - skipped, bad)
+          + (", %d skipped (not fully listed in %s)" % (skipped, a.settings) if skipped else ""))
     return 1 if bad else 0
 
 
