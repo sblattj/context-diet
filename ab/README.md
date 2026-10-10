@@ -66,6 +66,7 @@ Per arm: recall (all / implicit), wrong-skill rate, fire rate on negatives, medi
 ```sh
 python3 quick_ab.py --prompts prompts.tsv --a work/arms/before.json --b work/arms/after.json --reps 3 --model MODEL_ID
 ```
+A run that exceeds `--deadline` or exits nonzero is left out of every count, shown as `(N err)` on its row and on an `errored runs:` summary line, and makes the exit code 2. A prompt with no ok runs in an arm is left out of McNemar. Progress lines are flushed, so you can tail a redirected output file while it runs.
 
 ## Cost notes
 
