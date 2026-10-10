@@ -1,10 +1,10 @@
 #!/usr/bin/env bash
 # Check / fix how the Artifact tool is switched off.  Usage: artifacts.sh [status|fix]
 # Recommended: `export CLAUDE_CODE_DISABLE_ARTIFACT=1` in your shell rc, and publish with tools/publish-artifact.sh.
-# `fix` removes enableArtifact / disableArtifact / env.CLAUDE_CODE_DISABLE_ARTIFACT from ~/.claude/settings.json:
+# `fix` removes enableArtifact / disableArtifact / env.CLAUDE_CODE_DISABLE_ARTIFACT from $CLAUDE_CONFIG_DIR/settings.json (default ~/.claude):
 # nothing overrides those keys, running sessions hot-reload them ("off" reaches live sessions, "on" never does),
 # and they block the side-session publisher.
-S=${CLAUDE_SETTINGS:-$HOME/.claude/settings.json}
+S=${CLAUDE_SETTINGS:-${CLAUDE_CONFIG_DIR:-$HOME/.claude}/settings.json}
 case ${1:-status} in
   status)
     python3 - "$S" <<'PY'

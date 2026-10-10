@@ -1,7 +1,8 @@
 #!/usr/bin/env python3
 """LLM-filter mined candidates: keep prompts understandable without prior context.
 
-Batches of 25 go to `claude -p --model haiku --tools "" --output-format json`.
+Batches of 25 go to `claude -p --model MODEL --tools "" --output-format json`.
+--model is required (an explicit model id; the bare alias "haiku" is rejected).
 The judge returns the ids to KEEP; "yes", "do 2 and 3" etc. are dropped.
 
 Billing: unset ANTHROPIC_API_KEY to use your subscription (this script strips it
@@ -67,7 +68,7 @@ def main(argv=None):
     ap = argparse.ArgumentParser(description=__doc__, formatter_class=argparse.RawDescriptionHelpFormatter)
     ap.add_argument("candidates", help="candidates.jsonl from mine.py")
     ap.add_argument("--out", required=True, help="kept cases .jsonl")
-    ap.add_argument("--model", default="haiku", help="judge model (default: haiku)")
+    ap.add_argument("--model", required=True, type=_claude.model_arg, help="judge model id (required)")
     ap.add_argument("--batch-size", type=int, default=25)
     ap.add_argument("--deadline", type=float, default=120, help="per-call wall-clock seconds")
     ap.add_argument("--retries", type=int, default=1, help="retries per failed batch")

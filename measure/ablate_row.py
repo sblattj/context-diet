@@ -36,7 +36,6 @@ def build_row(payload, variant, prompt_idx, rep, expect=None, wall_ms=None):
         "cache_write_tokens": cw,
         # Everything the model had to read: the "start tokens" metric.
         "start_tokens": inp + cw + cr,
-        "cost_usd": r.get("total_cost_usd"),
         "turns": r.get("num_turns"),
         "duration_ms": r.get("duration_ms"),
         "wall_ms": wall_ms,

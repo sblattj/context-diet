@@ -17,12 +17,12 @@ CLAUDE_BIN="${CLAUDE_BIN:-claude}"
 
 usage() {
   cat <<'USAGE'
-Usage: ablate.sh [options]
+Usage: ablate.sh -m MODEL_ID [options]
 
 Runs each prompt under each variant (REPS times) via `claude -p` and writes
 <out>/<variant>.jsonl, one row per run: start_tokens (input + cache write +
-cache read), input/output/cache tokens, cost_usd, turns, duration_ms, wall_ms,
-is_error, and pass when --expect is given.
+cache read), input/output/cache tokens, turns, duration_ms, wall_ms, is_error,
+and pass when --expect is given.
 
 Options:
   -v, --variants LIST   comma-separated variant names (default: baseline,no-workflow,no-skills,no-mcp,no-instructions,six-tools,six-tools-no-mcp,floor)
@@ -31,7 +31,8 @@ Options:
   -n, --reps N          repetitions per prompt per variant (default 1)
   -o, --out DIR         output directory (default ./ablate-out)
   -e, --expect STR      mark a run pass/fail by whether the reply contains STR
-  -m, --model NAME      pass --model NAME
+  -m, --model ID        required: explicit model id passed as --model ID
+                        (the bare alias "haiku" is rejected)
       --max-turns N     pass --max-turns N
       --list            print the known variants and exit
   -h, --help            this help
@@ -75,6 +76,10 @@ while [ $# -gt 0 ]; do
   esac
 done
 [ -z "$VARIANTS" ] && VARIANTS="$DEFAULT_VARIANTS"
+[ -n "$MODEL" ] || { echo "-m/--model is required: name an explicit model id (see -h)" >&2; exit 2; }
+case "$MODEL" in
+  haiku|Haiku|HAIKU) echo "the bare alias \"$MODEL\" is not accepted; pass an explicit model id with -m" >&2; exit 2 ;;
+esac
 case "$REPS" in ''|*[!0-9]*) echo "--reps must be a positive integer" >&2; exit 2 ;; esac
 [ "$REPS" -ge 1 ] || { echo "--reps must be >= 1" >&2; exit 2; }
 command -v "$CLAUDE_BIN" >/dev/null 2>&1 || { echo "claude executable not found: $CLAUDE_BIN" >&2; exit 2; }
@@ -136,8 +141,7 @@ for v in $VARIANTS; do
   while [ "$p" -lt "$NPROMPTS" ]; do
     r=1
     while [ "$r" -le "$REPS" ]; do
-      extra=()
-      [ -n "$MODEL" ] && extra=(--model "$MODEL")
+      extra=(--model "$MODEL")
       [ -n "$MAX_TURNS" ] && extra=(${extra[@]+"${extra[@]}"} --max-turns "$MAX_TURNS")
       envp=()
       [ "${ABLATE_KEEP_API_KEY:-0}" = "1" ] || envp=(-u ANTHROPIC_API_KEY)

@@ -79,6 +79,7 @@ class AblateRowTests(unittest.TestCase):
         self.assertEqual(r["cache_read_tokens"], 50)
         self.assertTrue(r["pass"])
         self.assertEqual(r["wall_ms"], 9)
+        self.assertNotIn("cost_usd", r)  # token counts only
 
     def test_event_list_payload_and_fail(self):
         payload = [{"type": "system"}, self.RES]
@@ -109,6 +110,8 @@ class AblateScriptTests(TmpCase):
     def run_script(self, *args):
         env = dict(os.environ, CLAUDE_BIN=self.fake_claude(), FAKE_ARGS_DIR=self.tmp,
                    ANTHROPIC_API_KEY="secret")
+        if "-m" not in args and "--help" not in args:
+            args = ("-m", "test-model-1") + args
         return subprocess.run(["/bin/bash", os.path.join(KIT, "measure", "ablate.sh")] + list(args),
                               env=env, capture_output=True, text=True)
 
@@ -125,6 +128,9 @@ class AblateScriptTests(TmpCase):
         captured = "".join(slurp(os.path.join(self.tmp, f))
                            for f in os.listdir(self.tmp) if f.startswith("args."))
         self.assertIn("--strict-mcp-config", captured)
+        self.assertIn("--model test-model-1", captured)
+        for v in ("baseline", "floor"):
+            self.assertNotIn("cost_usd", slurp(os.path.join(out, v + ".jsonl")))
         self.assertIn("MDS=1", captured)
         self.assertNotIn("KEY=secret", captured)
 
@@ -149,6 +155,27 @@ class AblateScriptTests(TmpCase):
         p = self.run_script("--help")
         self.assertEqual(p.returncode, 0)
         self.assertIn("Usage: ablate.sh", p.stdout)
+        self.assertNotIn("cost_usd", p.stdout)
+
+    def test_model_required(self):
+        out = os.path.join(self.tmp, "out")
+        p = self.run_script("-m", "", "-v", "baseline", "-o", out)
+        self.assertEqual(p.returncode, 2)
+        self.assertIn("--model is required", p.stderr)
+        self.assertFalse(os.path.exists(out))
+
+    def test_bare_haiku_rejected(self):
+        out = os.path.join(self.tmp, "out")
+        p = self.run_script("-m", "haiku", "-v", "baseline", "-o", out)
+        self.assertEqual(p.returncode, 2)
+        self.assertIn("explicit model id", p.stderr)
+        self.assertFalse(os.path.exists(out))
+
+    def test_list_needs_no_model(self):
+        p = subprocess.run(["/bin/bash", os.path.join(KIT, "measure", "ablate.sh"), "--list"],
+                           capture_output=True, text=True)
+        self.assertEqual(p.returncode, 0)
+        self.assertIn("floor", p.stdout)
 
 
 class SkillUsageTests(TmpCase):
@@ -175,7 +202,7 @@ class SkillUsageTests(TmpCase):
 
     def rows(self, **kw):
         proj, skills = self.build()
-        rc, out, err = self.run_main(usage, [proj, "--skills-dir", skills, "--now", NOW])
+        rc, out, err = self.run_main(usage, [proj, "--all-projects", "--skills-dir", skills, "--now", NOW])
         self.assertEqual(rc, 0, err)
         rd = list(csv.DictReader(io.StringIO(out)))
         return {r["skill"]: r for r in rd}, out
@@ -205,7 +232,7 @@ class SkillUsageTests(TmpCase):
         fx.write_jsonl(os.path.join(proj, "a", "s.jsonl"), [ab, real])
         fx.write_skill(skills, "alpha", "Short.")
         for extra, want in (([], "1"), (["--include-headless"], "2")):
-            rc, out, err = self.run_main(usage, [proj, "--skills-dir", skills, "--now", NOW] + extra)
+            rc, out, err = self.run_main(usage, [proj, "--all-projects", "--skills-dir", skills, "--now", NOW] + extra)
             self.assertEqual(rc, 0, err)
             rows = {r["skill"]: r for r in csv.DictReader(io.StringIO(out))}
             self.assertEqual(rows["alpha"]["model_invocations"], want)

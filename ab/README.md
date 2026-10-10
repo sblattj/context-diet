@@ -11,28 +11,34 @@ transcripts --mine.py--> candidates.jsonl --filter.py--> cases.jsonl --run.py-->
 
 Every model call is `claude -p ...` in a subprocess. With `ANTHROPIC_API_KEY` set, Claude Code bills that API key; without it, your subscription login is used. `filter.py`, `run.py` and `quick_ab.py` **strip the key from the child environment by default**; `--keep-api-key` disables that. Every call has a hard wall-clock `--deadline` (the whole process group is killed) and bounded output (captured stdout is capped; `filter.py` also sets `CLAUDE_CODE_MAX_OUTPUT_TOKENS`).
 
+## Model: always explicit
+
+`filter.py`, `synth.py`, `run.py` and `quick_ab.py` require `--model` and have no implicit default. Name an explicit model id (`MODEL_ID` below); the bare alias `haiku` is rejected. Any other value is passed through to `claude --model`. Pin the same id across arms and rounds so results compare.
+
 ## Walkthrough
 
 ```sh
 cd ab
 
-# 1. Mine. Pass your transcript dir as an argument (nothing is hardcoded).
-python3 mine.py "$HOME/.claude/projects" --out work/candidates.jsonl --days 30 --max-negatives 150
+# 1. Mine. Default root: $CLAUDE_CONFIG_DIR/projects, else ~/.claude/projects.
+python3 mine.py --all-projects --out work/candidates.jsonl --days 30 --max-negatives 150
 ```
+Scope: without `--all-projects`, `mine.py` reads only the current directory's project (`<root>/<slug of cwd>`, slug = absolute path with every non-alphanumeric char turned into `-`), or the one named by `--project PATH`, and exits 2 if that project has no session dir. An explicit root (`mine.py /some/projects ...`) is scoped the same way; a directory that directly holds `.jsonl` files, or an explicit file, is read as-is.
+
 A user prompt whose turn called `Skill(x)` is a positive labelled `x` (several skills in one turn: any is accepted). Short prompts whose turn called no skill are negatives. Positives that literally name the skill get `explicit: true`. Typed slash commands, tool results, meta/caveat messages and subagent (sidechain) turns are skipped; prompts are de-duplicated. Headless sessions (`claude -p`, SDK: any `entrypoint` other than `cli`) are skipped too, because those are your own A/B and eval runs; `--include-headless` keeps them.
 
 ```sh
 # 2. Filter with a cheap judge (batches of 25; keeps prompts understandable without prior context)
-python3 filter.py work/candidates.jsonl --out work/cases.jsonl --model haiku
+python3 filter.py work/candidates.jsonl --out work/cases.jsonl --model MODEL_ID
 ```
 Mined negatives are noisy (some no-skill turns *should* have used a skill): relabel by hand before trusting the negative fire rate.
 
 ```sh
 # 2b. Synthetic positives for skills with no (or too few) mined positives (the issue added 14)
 python3 synth.py work/cases.jsonl --skills-dir "$HOME/.claude/skills" --arms work/arms/*.json \
-    --min-positives 1 --per-skill 2 --model haiku
+    --min-positives 1 --per-skill 2 --model MODEL_ID
 ```
-Appends `"synthetic": true` positives (same schema, `explicit: false`) to `cases.jsonl`, generated from each skill's name and description through the same `claude -p` path as `filter.py` (haiku, deadline, key stripped). Prompts that name the skill, duplicates of existing cases, and skills hidden from the model (`user-invocable-only`/`off` in any `--arms` file, or `disable-model-invocation: true`) are skipped. `--min-positives` defaults to 1 and `--per-skill` to 2. `--dry-run` lists what would be generated. Run it after `make_arms.py` so `--arms` exists, and re-run `run.py` afterwards (it only runs the new cases). `report.py` excludes synthetic cases by default (`--synthetic include|only` to change) and prints their recall on a separate line, so real recall is not inflated.
+Appends `"synthetic": true` positives (same schema, `explicit: false`) to `cases.jsonl`, generated from each skill's name and description through the same `claude -p` path as `filter.py` (your `--model`, deadline, key stripped). Prompts that name the skill, duplicates of existing cases, and skills hidden from the model (`user-invocable-only`/`off` in any `--arms` file, or `disable-model-invocation: true`) are skipped. `--min-positives` defaults to 1 and `--per-skill` to 2. `--dry-run` lists what would be generated. Run it after `make_arms.py` so `--arms` exists, and re-run `run.py` afterwards (it only runs the new cases). `report.py` excludes synthetic cases by default (`--synthetic include|only` to change) and prints their recall on a separate line, so real recall is not inflated.
 
 ```sh
 # 3. Arms: complete skillOverrides maps; each arm pins every skill explicitly. First --arm = baseline.
@@ -43,10 +49,10 @@ python3 make_arms.py --skills-dir "$HOME/.claude/skills" --out work/arms \
 #   --base-settings ~/.claude/settings.json --arm current --arm after --set 'after:x=name-only'
 
 # 4. Run (resumable; re-run the same command after an interruption)
-python3 run.py --cases work/cases.jsonl --arms work/arms --out work/results.jsonl --reps 2 --workers 3
+python3 run.py --cases work/cases.jsonl --arms work/arms --out work/results.jsonl --reps 2 --workers 3 --model MODEL_ID
 tail -f work/results.jsonl.progress     # in another terminal
 ```
-Each run is `claude -p <prompt> --settings <arm>.json --tools Skill Read Grep Glob --strict-mcp-config --mcp-config '{"mcpServers":{}}' --max-turns 2 --output-format stream-json --verbose` in an empty temp directory (read-only tools, no MCP: side-effect free). It records the `Skill` tool_use names and the first assistant turn's `usage` (input + cache creation + cache read = start tokens). Results are append-only; keys are `arm|case|rep`; finished keys are skipped, errored keys are retried. Positives whose expected skills are all `user-invocable-only`/`off` in an arm are excluded by design (recorded, no call made). Skills are installed where Claude Code finds them (your user skills dir, or `.claude/skills` under `--cwd`).
+Each run is `claude -p <prompt> --model <id> --settings <arm>.json --tools Skill Read Grep Glob --strict-mcp-config --mcp-config '{"mcpServers":{}}' --max-turns 2 --output-format stream-json --verbose` in an empty temp directory (read-only tools, no MCP: side-effect free). It records the `Skill` tool_use names and the first assistant turn's `usage` (input + cache creation + cache read = start tokens). Results are append-only; keys are `arm|case|rep`; finished keys are skipped, errored keys are retried. Positives whose expected skills are all `user-invocable-only`/`off` in an arm are excluded by design (recorded, no call made). Skills are installed where Claude Code finds them (your user skills dir, or `.claude/skills` under `--cwd`).
 
 ```sh
 # 5. Report
@@ -58,12 +64,12 @@ Per arm: recall (all / implicit), wrong-skill rate, fire rate on negatives, medi
 
 `quick_ab.py` is the single-file check for hand-written prompts (`skill<TAB>prompt` per line) and two settings files:
 ```sh
-python3 quick_ab.py --prompts prompts.tsv --a work/arms/before.json --b work/arms/after.json --reps 3
+python3 quick_ab.py --prompts prompts.tsv --a work/arms/before.json --b work/arms/after.json --reps 3 --model MODEL_ID
 ```
 
 ## Cost notes
 
-Runs = cases x arms x reps. The issue's reference run (98 cases, 2 arms, 2 reps) was 448 runs per round on Sonnet. A run is about 1 to 2 model turns with a start context of roughly 17k to 36k tokens depending on your setup, so budget accordingly; try `--limit 10 --reps 1` first. Filtering is 1 haiku call per 25 candidates. Use `--model` to pick the run model and keep `--workers` low enough to stay under rate limits.
+Runs = cases x arms x reps. The issue's reference run (98 cases, 2 arms, 2 reps) was 448 runs per round on Sonnet. A run is about 1 to 2 model turns with a start context of roughly 17k to 36k tokens depending on your setup, so budget accordingly; try `--limit 10 --reps 1` first. Filtering is 1 model call per 25 candidates. `--model` picks the model for every step; keep `--workers` low enough to stay under rate limits.
 
 ## Tests
 
@@ -79,7 +85,7 @@ For a `name-only` skill the name is all the model sees. `make_rename_arms.py` bu
 ```sh
 echo '{"boil-the-ocean": "going-all-in-or-about-to-claim-done"}' > renames.json
 python3 make_rename_arms.py --skills-dir ~/.claude/skills --base arms/before.json --rename renames.json --name renamed --out arms
-python3 run.py --arms arms/before.json arms/renamed.json --cases work/cases.jsonl --reps 3
+python3 run.py --arms arms/before.json arms/renamed.json --cases work/cases.jsonl --reps 3 --model MODEL_ID --out work/results.jsonl
 ```
 
 Write the test prompts from the SKILL.md with a writer that never sees the new names, or the arm wins by construction. Measured once (7 opaque names, 35 fresh prompts x 3 reps): recall 49% -> 90%, McNemar p < 0.0001, other skills flat. A `use-this-skill-when-` prefix (`--prefix`) gained nothing over the same names and cost ~300 start tokens.

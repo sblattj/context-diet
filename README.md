@@ -28,10 +28,12 @@ Or just clone and run the scripts. Python 3.9+, no dependencies; `tmux` for the 
 ## Quick start
 
 ```sh
-python3 measure/start_tokens.py                    # what do my last 5 sessions start at?
-python3 audit/skill-usage.py -o /tmp/usage.csv
+python3 measure/start_tokens.py                    # what do my last 5 sessions in this project start at?
+python3 audit/skill-usage.py --all-projects -o /tmp/usage.csv
 python3 audit/audit.py /tmp/usage.csv              # what to hide or list by name only
 ```
+
+Scope and config: scripts read `$CLAUDE_CONFIG_DIR` if set, else `~/.claude`. Session readers (`start_tokens.py`, `skill-usage.py`, `ab/mine.py`) default to the current directory's project; use `--project PATH` for another one or `--all-projects` for all. If the project has no sessions they exit 2 rather than reading everything. Anything that calls a model (`ablate.sh`, `ab/filter.py`, `ab/synth.py`, `ab/run.py`, `ab/quick_ab.py`) requires `--model` with an explicit model id.
 
 Then follow `docs/RUNBOOK.md`: change one lever, A/B it (`ab/README.md`), keep it only if recall holds.
 

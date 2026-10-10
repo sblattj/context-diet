@@ -16,6 +16,7 @@ import synth
 import run
 
 AB = os.path.dirname(os.path.dirname(os.path.abspath(__file__)))
+M = "test-model-1"  # any explicit id; the bare alias "haiku" is rejected
 
 
 class FakeClaudeCase(unittest.TestCase):
@@ -109,7 +110,7 @@ class FilterTests(FakeClaudeCase):
         cands = [{"id": "c%d" % i, "prompt": "p%d" % i, "label": "negative", "skills": []} for i in range(30)]
         cands[3]["prompt"] = "yes"
         helpers.write_jsonl(self.p("c.jsonl"), cands)
-        rc = filt.main([self.p("c.jsonl"), "--out", self.p("k.jsonl"), "--batch-size", "25"])
+        rc = filt.main([self.p("c.jsonl"), "--out", self.p("k.jsonl"), "--batch-size", "25", "--model", M])
         self.assertEqual(rc, 0)
         kept = {c["id"] for c in _claude.read_jsonl(self.p("k.jsonl"))}
         self.assertEqual(len(kept), 29)
@@ -119,13 +120,13 @@ class FilterTests(FakeClaudeCase):
         self.assertFalse(calls[0]["has_key"])
         self.assertEqual(calls[0]["max_out"], "2000")
         a = calls[0]["args"]
-        self.assertEqual(a[a.index("--model") + 1], "haiku")
+        self.assertEqual(a[a.index("--model") + 1], M)
         self.assertEqual(a[a.index("--tools") + 1], "")
 
     def test_filter_list_shaped_output(self):
         os.environ["FAKE_CLAUDE_LIST"] = "1"
         helpers.write_jsonl(self.p("c.jsonl"), [{"id": "c1", "prompt": "real ask", "label": "negative", "skills": []}])
-        self.assertEqual(filt.main([self.p("c.jsonl"), "--out", self.p("k.jsonl")]), 0)
+        self.assertEqual(filt.main([self.p("c.jsonl"), "--out", self.p("k.jsonl"), "--model", M]), 0)
         self.assertEqual(len(_claude.read_jsonl(self.p("k.jsonl"))), 1)
 
     def test_deadline_kills(self):
@@ -153,7 +154,7 @@ class SynthTests(FakeClaudeCase):
             {"id": "c1", "prompt": "real covered prompt", "label": "positive", "skills": ["covered"], "explicit": False}])
 
     def test_synth(self):
-        rc = synth.main([self.p("cases.jsonl"), "--skills-dir", self.p("skills"), "--per-skill", "2"])
+        rc = synth.main([self.p("cases.jsonl"), "--skills-dir", self.p("skills"), "--per-skill", "2", "--model", M])
         self.assertEqual(rc, 0)
         rows = _claude.read_jsonl(self.p("cases.jsonl"))
         syn = [r for r in rows if r.get("synthetic")]
@@ -165,19 +166,19 @@ class SynthTests(FakeClaudeCase):
         calls = self.calls()
         self.assertEqual(len(calls), 2)
         self.assertFalse(calls[0]["has_key"])
-        self.assertEqual(calls[0]["args"][calls[0]["args"].index("--model") + 1], "haiku")
+        self.assertEqual(calls[0]["args"][calls[0]["args"].index("--model") + 1], M)
         # idempotent: rerun adds nothing (dedupe) -- skills now have positives anyway
-        synth.main([self.p("cases.jsonl"), "--skills-dir", self.p("skills")])
+        synth.main([self.p("cases.jsonl"), "--skills-dir", self.p("skills"), "--model", M])
         self.assertEqual(len(_claude.read_jsonl(self.p("cases.jsonl"))), 5)
 
     def test_dedupe_and_arm_skip(self):
         json.dump({"skillOverrides": {"deploy": "user-invocable-only"}}, open(self.p("a.json"), "w"))
-        synth.main([self.p("cases.jsonl"), "--skills-dir", self.p("skills"), "--arms", self.p("a.json"), "--per-skill", "1"])
+        synth.main([self.p("cases.jsonl"), "--skills-dir", self.p("skills"), "--arms", self.p("a.json"), "--per-skill", "1", "--model", M])
         names = {r["skills"][0] for r in _claude.read_jsonl(self.p("cases.jsonl")) if r.get("synthetic")}
         self.assertEqual(names, {"haiku-poem"})
 
     def test_min_positives_dry_run(self):
-        synth.main([self.p("cases.jsonl"), "--skills-dir", self.p("skills"), "--min-positives", "2", "--dry-run"])
+        synth.main([self.p("cases.jsonl"), "--skills-dir", self.p("skills"), "--min-positives", "2", "--dry-run", "--model", M])
         self.assertFalse(os.path.exists(self.log))  # no model call in dry-run
 
 
@@ -233,7 +234,7 @@ class RunReportTests(FakeClaudeCase):
 
     def go(self, extra=()):
         return run.main(["--cases", self.p("cases.jsonl"), "--arms", self.p("arms"), "--out", self.p("res.jsonl"),
-                         "--reps", "2", "--workers", "2"] + list(extra))
+                         "--reps", "2", "--workers", "2", "--model", M] + list(extra))
 
     def test_run_resume_and_report(self):
         self.assertEqual(self.go(), 0)
@@ -323,7 +324,7 @@ class RunReportTests(FakeClaudeCase):
         buf = io.StringIO()
         with contextlib.redirect_stdout(buf):
             quick_ab.main(["--prompts", self.p("p.tsv"), "--a", self.p("arms/a_before.json"),
-                           "--b", self.p("arms/b_after.json"), "--reps", "2"])
+                           "--b", self.p("arms/b_after.json"), "--reps", "2", "--model", M])
         self.assertIn("A deploy", buf.getvalue())
         self.assertIn("only A hit: 2, only B hit: 0, exact McNemar p = 0.5", buf.getvalue())
 

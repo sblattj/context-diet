@@ -7,7 +7,14 @@ no skill become negatives. Positives that literally name the skill are tagged
 explicit. Typed slash commands, tool results, meta/caveat messages and
 sidechain (subagent) turns are skipped.
 
-Usage: mine.py TRANSCRIPT_DIR_OR_FILE [...] --out candidates.jsonl [--days 30]
+Usage: mine.py [TRANSCRIPT_DIR_OR_FILE ...] --out candidates.jsonl [--days 30]
+               [--project PATH | --all-projects]
+
+Scope: with no paths, reads <config>/projects (config = $CLAUDE_CONFIG_DIR or
+~/.claude). Directories are projects roots and are scoped to the CURRENT project
+(<root>/<slug of cwd>) unless --project PATH or --all-projects is given; a
+directory that directly holds .jsonl files is one project's session dir and is
+read as-is, and explicit files are always read. A missing project dir exits 2.
 """
 import argparse
 import json
@@ -16,6 +23,9 @@ import random
 import sys
 import time
 from datetime import datetime, timezone
+
+sys.path.insert(0, os.path.join(os.path.dirname(os.path.dirname(os.path.abspath(__file__))), "lib"))
+import ccpaths  # noqa: E402
 
 
 def iter_files(paths):
@@ -108,7 +118,8 @@ def mine_file(path, min_ts=None, include_headless=False):
 
 def main(argv=None):
     ap = argparse.ArgumentParser(description=__doc__.split("\n\n")[0])
-    ap.add_argument("paths", nargs="+", help="transcript .jsonl files or directories (e.g. your Claude projects dir)")
+    ap.add_argument("paths", nargs="*",
+                    help="transcript .jsonl files or directories (default: $CLAUDE_CONFIG_DIR/projects or ~/.claude/projects)")
     ap.add_argument("--out", required=True, help="output candidates.jsonl")
     ap.add_argument("--days", type=float, default=30, help="only turns newer than N days (0 = all)")
     ap.add_argument("--max-negative-chars", type=int, default=300, help="negatives must be shorter than this")
@@ -117,11 +128,26 @@ def main(argv=None):
     ap.add_argument("--seed", type=int, default=0)
     ap.add_argument("--include-headless", action="store_true",
                     help="also mine `claude -p` / SDK sessions (default: interactive sessions only)")
+    ccpaths.add_scope_args(ap)
     a = ap.parse_args(argv)
+
+    paths = []
+    for p in a.paths or [ccpaths.projects_dir()]:
+        if os.path.isfile(p):
+            paths.append(p)
+            continue
+        if not os.path.isdir(p):
+            print("no such transcript path: %s" % p, file=sys.stderr)
+            return 2
+        try:
+            paths.append(ccpaths.resolve_root(p, a.project, a.all_projects))
+        except ccpaths.ScopeError as e:
+            print(e, file=sys.stderr)
+            return 2
 
     min_ts = time.time() - a.days * 86400 if a.days > 0 else None
     pos, neg, seen = [], [], set()
-    for f in iter_files(a.paths):
+    for f in iter_files(paths):
         for prompt, _ts, skills in mine_file(f, min_ts, a.include_headless):
             key = prompt[:a.max_prompt_chars]
             if key in seen:

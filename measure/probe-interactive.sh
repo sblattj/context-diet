@@ -15,7 +15,7 @@ set -u
 HERE=$(cd "$(dirname "$0")" && pwd)
 CWD=$(cd "${PROBE_CWD:-$PWD}" && pwd -P); OUT=${PROBE_OUT:-./probe-out}; mkdir -p "$OUT"
 LOG=$OUT/probe.log; ROWS=$OUT/probe.jsonl; WAIT=${PROBE_WAIT:-90}; SH=${LAUNCH_SHELL:-}
-PROJ=$HOME/.claude/projects/$(printf '%s' "$CWD" | sed 's#[^A-Za-z0-9]#-#g')
+PROJ=${CLAUDE_CONFIG_DIR:-$HOME/.claude}/projects/$(printf '%s' "$CWD" | sed 's#[^A-Za-z0-9]#-#g')
 TOOLS=("$@"); [ ${#TOOLS[@]} -eq 0 ] && TOOLS=(Artifact Workflow Agent AskUserQuestion)
 command -v tmux >/dev/null || { echo "needs tmux" >&2; exit 2; }
 probe() { # tag, extra flags
