@@ -84,6 +84,18 @@ class MineTests(FakeClaudeCase):
         self.assertFalse(any(r["prompt"].startswith("<") for r in got))
         self.assertEqual(len(got), 4)  # 2 positives + "what time" + "old prompt" (window is 100 years)
 
+    def test_headless_skipped_by_default(self):
+        helpers.write_jsonl(self.p("s.jsonl"), [
+            {"type": "user", "entrypoint": "sdk-cli", "message": {"content": "a test case"},
+             "timestamp": "2099-01-01T00:00:00Z"},
+            {"type": "user", "entrypoint": "cli", "message": {"content": "a real ask"},
+             "timestamp": "2099-01-01T00:00:00Z"}])
+        out = self.p("c.jsonl")
+        mine.main([self.p("s.jsonl"), "--out", out, "--days", "0"])
+        self.assertEqual([r["prompt"] for r in _claude.read_jsonl(out)], ["a real ask"])
+        mine.main([self.p("s.jsonl"), "--out", out, "--days", "0", "--include-headless"])
+        self.assertEqual(len(_claude.read_jsonl(out)), 2)
+
     def test_days_window_drops_old(self):
         helpers.write_jsonl(self.p("s.jsonl"), [
             {"type": "user", "message": {"content": "old one"}, "timestamp": "2000-01-01T00:00:00Z"}])
@@ -188,6 +200,17 @@ class ArmsTests(FakeClaudeCase):
         self.assertEqual(open(self.p("arms/order.txt")).read().split(), ["before", "after"])
         self.assertEqual(before, {"deploy": "on", "lint-thing": "on"})
         self.assertEqual(after, {"deploy": "on", "lint-thing": "name-only"})
+
+    def test_base_settings(self):
+        sd = self.make_skills()
+        with open(self.p("settings.json"), "w") as f:
+            json.dump({"skillOverrides": {"lint-thing": "user-invocable-only", "gone": "off"}}, f)
+        make_arms.main(["--skills-dir", sd, "--out", self.p("arms"), "--base-settings", self.p("settings.json"),
+                        "--arm", "current", "--arm", "after", "--set", "after:deploy=name-only"])
+        cur = json.load(open(self.p("arms/current.json")))["skillOverrides"]
+        after = json.load(open(self.p("arms/after.json")))["skillOverrides"]
+        self.assertEqual(cur, {"deploy": "on", "lint-thing": "user-invocable-only"})
+        self.assertEqual(after, {"deploy": "name-only", "lint-thing": "user-invocable-only"})
 
     def test_bad_rule(self):
         with self.assertRaises(SystemExit):

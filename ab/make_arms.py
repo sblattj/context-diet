@@ -52,8 +52,19 @@ def discover(skills_dir):
     return names
 
 
-def build_arms(names, arm_names, rules, default_state="on"):
-    arms = {a: {n: default_state for n in names} for a in arm_names}
+def load_base(path):
+    """skillOverrides from a settings.json, so arms start from your current setup."""
+    with open(os.path.expanduser(path), encoding="utf-8") as fh:
+        ov = json.load(fh).get("skillOverrides") or {}
+    bad = {k: v for k, v in ov.items() if v not in STATES}
+    if bad:
+        raise SystemExit("unknown states in %s: %s" % (path, bad))
+    return ov
+
+
+def build_arms(names, arm_names, rules, default_state="on", base=None):
+    base = base or {}
+    arms = {a: {n: base.get(n, default_state) for n in names} for a in arm_names}
     for arm, pattern, state in rules:
         if arm not in arms:
             raise SystemExit("--set refers to unknown arm %r" % arm)
@@ -79,13 +90,17 @@ def main(argv=None):
     ap.add_argument("--arm", action="append", default=[], help="arm name (repeatable; first = baseline). Default: before")
     ap.add_argument("--set", dest="sets", action="append", default=[], metavar="ARM:GLOB=STATE")
     ap.add_argument("--default-state", default="on", choices=STATES)
+    ap.add_argument("--base-settings", metavar="SETTINGS_JSON",
+                    help="start every arm from this file's skillOverrides (e.g. ~/.claude/settings.json); "
+                         "skills it doesn't mention get --default-state")
     a = ap.parse_args(argv)
 
     names = discover(a.skills_dir)
     if not names:
         raise SystemExit("no skills found in %s" % a.skills_dir)
     arm_names = a.arm or ["before"]
-    arms = build_arms(names, arm_names, [parse_rule(s) for s in a.sets], a.default_state)
+    base = load_base(a.base_settings) if a.base_settings else None
+    arms = build_arms(names, arm_names, [parse_rule(s) for s in a.sets], a.default_state, base)
     os.makedirs(a.out, exist_ok=True)
     with open(os.path.join(a.out, "order.txt"), "w", encoding="utf-8") as fh:
         fh.write("\n".join(arm_names) + "\n")  # run.py uses this: first arm = baseline

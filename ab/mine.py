@@ -79,13 +79,20 @@ def is_explicit(prompt, skill):
     return skill.lower() in low or bare in low
 
 
-def mine_file(path, min_ts=None):
+def mine_file(path, min_ts=None, include_headless=False):
+    """Headless records (entrypoint other than "cli", e.g. `claude -p` A/B or eval runs) are
+    skipped unless include_headless: their prompts are test cases, not real asks."""
     turns = []  # [prompt, ts, [skills]]
     with open(path, encoding="utf-8", errors="replace") as fh:
         for line in fh:
             try:
                 rec = json.loads(line)
             except ValueError:
+                continue
+            if not isinstance(rec, dict):
+                continue
+            ep = rec.get("entrypoint")
+            if ep and ep != "cli" and not include_headless:
                 continue
             txt = user_text(rec)
             if txt is not None:
@@ -108,12 +115,14 @@ def main(argv=None):
     ap.add_argument("--max-prompt-chars", type=int, default=2000, help="truncate stored prompts")
     ap.add_argument("--max-negatives", type=int, default=0, help="random-sample negatives to this count (0 = keep all)")
     ap.add_argument("--seed", type=int, default=0)
+    ap.add_argument("--include-headless", action="store_true",
+                    help="also mine `claude -p` / SDK sessions (default: interactive sessions only)")
     a = ap.parse_args(argv)
 
     min_ts = time.time() - a.days * 86400 if a.days > 0 else None
     pos, neg, seen = [], [], set()
     for f in iter_files(a.paths):
-        for prompt, _ts, skills in mine_file(f, min_ts):
+        for prompt, _ts, skills in mine_file(f, min_ts, a.include_headless):
             key = prompt[:a.max_prompt_chars]
             if key in seen:
                 continue
