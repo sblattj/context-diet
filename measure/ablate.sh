@@ -25,7 +25,7 @@ cache read), input/output/cache tokens, cost_usd, turns, duration_ms, wall_ms,
 is_error, and pass when --expect is given.
 
 Options:
-  -v, --variants LIST   comma-separated variant names (default: baseline,no-skills,no-mcp,no-instructions,six-tools,six-tools-no-mcp,floor)
+  -v, --variants LIST   comma-separated variant names (default: baseline,no-workflow,no-skills,no-mcp,no-instructions,six-tools,six-tools-no-mcp,floor)
   -p, --prompt TEXT     single prompt (default: "Reply with exactly: OK")
   -f, --prompts-file F  file with one prompt per line (overrides --prompt)
   -n, --reps N          repetitions per prompt per variant (default 1)
@@ -38,7 +38,11 @@ Options:
 
 Variants:
   baseline          your normal config
-  no-skills         --disable-slash-commands (no skills listing)
+  no-workflow       --disallowedTools Workflow (the pair for no-skills)
+  no-skills         --disable-slash-commands plus no Workflow tool. With skills
+                    off, Claude Code inlines the workflow-authoring skill into
+                    the Workflow tool (about +4k tokens), so skills cost =
+                    no-workflow minus no-skills, not baseline minus no-skills
   no-mcp            --strict-mcp-config with an empty server map
   no-instructions   CLAUDE_CODE_DISABLE_CLAUDE_MDS=1 (no CLAUDE.md files)
   six-tools         --tools Bash Read Edit Write Grep Glob (omits ToolSearch:
@@ -52,8 +56,8 @@ ABLATE_KEEP_API_KEY=1 to keep it.
 USAGE
 }
 
-KNOWN="baseline no-skills no-mcp no-instructions six-tools six-tools-no-mcp floor"
-DEFAULT_VARIANTS="baseline,no-skills,no-mcp,no-instructions,six-tools,six-tools-no-mcp,floor"
+KNOWN="baseline no-workflow no-skills no-mcp no-instructions six-tools six-tools-no-mcp floor"
+DEFAULT_VARIANTS="baseline,no-workflow,no-skills,no-mcp,no-instructions,six-tools,six-tools-no-mcp,floor"
 
 while [ $# -gt 0 ]; do
   case "$1" in
@@ -84,7 +88,8 @@ variant_config() {
   ARGS=(); VENV=()
   case "$1" in
     baseline) ;;
-    no-skills) ARGS=(--disable-slash-commands) ;;
+    no-workflow) ARGS=(--disallowedTools Workflow) ;;
+    no-skills) ARGS=(--disable-slash-commands --disallowedTools Workflow) ;;
     no-mcp) ARGS=(--strict-mcp-config --mcp-config "$EMPTY_MCP") ;;
     no-instructions) VENV=(CLAUDE_CODE_DISABLE_CLAUDE_MDS=1) ;;
     six-tools) ARGS=(--tools $SIX_TOOLS) ;;

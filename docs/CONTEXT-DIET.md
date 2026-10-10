@@ -28,7 +28,7 @@ Each run is `claude -p <prompt> --output-format json` plus the variant's flags. 
 | `wall_ms` | Wall time measured around the process. |
 | `is_error`, `pass` | `pass` appears only with `--expect STR` and means the reply contains `STR`. |
 
-Variants: `baseline`, `no-skills` (`--disable-slash-commands`), `no-mcp` (strict empty MCP config), `no-instructions` (`CLAUDE_CODE_DISABLE_CLAUDE_MDS=1`), `six-tools` (`--tools Bash Read Edit Write Grep Glob`), `six-tools-no-mcp`, and `floor` (six tools, no MCP, no instructions files).
+Variants: `baseline`, `no-workflow` (`--disallowedTools Workflow`), `no-skills` (`--disable-slash-commands`, also no Workflow: with skills off the Workflow tool inlines the workflow-authoring skill, so read skills cost as no-workflow minus no-skills), `no-mcp` (strict empty MCP config), `no-instructions` (`CLAUDE_CODE_DISABLE_CLAUDE_MDS=1`), `six-tools` (`--tools Bash Read Edit Write Grep Glob`), `six-tools-no-mcp`, and `floor` (six tools, no MCP, no instructions files).
 
 Reading the results:
 

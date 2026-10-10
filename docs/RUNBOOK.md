@@ -327,7 +327,7 @@ Build it only if step 12 shows recall dropping. On our setup, name-only skills w
 | "Lean" run costs more than baseline (42k) | `--tools` without ToolSearch loads every MCP schema in full | Empty MCP config, or include ToolSearch |
 | Disallowing ToolSearch: 49k -> 101k | Same thing, in a main session | Never disallow ToolSearch |
 | Headless says 28k, real sessions start at 49k | `-p` skips interactive-only context (agent listing, output style, built-in and plugin skills, Artifact) | Report real first-turn usage; use `-p` only for per-part deltas |
-| "no-skills" run shows only 0.9k saved | `--disable-slash-commands` doesn't remove the skills listing (18.9k chars still there) | Measure from the `skill_listing` attachment in the session log |
+| "no-skills" run costs more than baseline | With skills off, Claude Code inlines the `workflow-authoring` skill (about 17k chars) into the Workflow tool, which outweighs the listing it dropped | Compare `no-workflow` with `no-skills` (`ablate.sh` does both) |
 | "Lean tools" and "no skills" look the same | Leaving `Skill` out of `--tools` also drops the listing | Change one thing per run |
 | Subagent numbers don't line up | Agent types start at different sizes (workflow 42.3k, general-purpose 34.8k, lean 9.6k) | Compare the same type; read usage from the transcript |
 | Artifact tool won't come back on | `enableArtifact: false` in settings wins over everything and hot-reloads into live sessions | Use the `CLAUDE_CODE_DISABLE_ARTIFACT=1` env export; publish via `tools/publish-artifact.sh` |
