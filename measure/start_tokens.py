@@ -8,7 +8,7 @@ Default: newest 5 fresh interactive (entrypoint=cli) sessions of the CURRENT pro
 ("This session is being continued...") are skipped: they start with a summary, not a fresh context.
 Explicit FILEs are always shown as-is."""
 import json,sys,os,glob,argparse,datetime,statistics
-sys.path.insert(0,os.path.join(os.path.dirname(os.path.dirname(os.path.abspath(__file__))),'lib'))
+sys.path.insert(0,os.path.join(os.path.dirname(os.path.dirname(os.path.realpath(__file__))),'lib'))
 import ccpaths  # noqa: E402
 BLOCKS=['skill_listing','instructions','mcp_instructions_delta','deferred_tools_delta','agent_listing_delta','output_style_instructions','prompt_snapshot']
 RESUMED_PREFIX='This session is being continued'
