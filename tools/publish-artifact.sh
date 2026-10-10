@@ -4,7 +4,8 @@
 #
 # Usage: publish-artifact.sh FILE [EXISTING_ARTIFACT_URL] [--timeout SECS]
 # Prints the artifact URL on success. Log: ${PUBLISH_LOG:-/tmp/publish-artifact.log} (includes the
-# side session's screen on timeout).
+# side session's screen on timeout). Safe to call from inside a Claude Code session: it drops the
+# child-session env and forces transcript persistence, which it needs to read the URL back.
 # Env: PUBLISH_CWD  a TRUSTED dir to start the side session in (default: $HOME); a new folder stops on the trust prompt
 #      LAUNCH_SHELL run claude through a shell, e.g. "zsh -ic" when `claude` is a function in your rc (default: none)
 # Keep Artifact off with `export CLAUDE_CODE_DISABLE_ARTIFACT=1` in your shell rc, NOT with
@@ -24,9 +25,9 @@ P="$ACT. Do not edit the file. Then reply with only the artifact URL on one line
 echo "$(date +%T) $TAG start $F ${URL:-new}" >> "$LOG"
 MARK=$(mktemp); touch "$MARK"
 # The prompt goes BEFORE --add-dir: --add-dir takes a list and would swallow it.
-RUN="unset CLAUDE_CODE_DISABLE_ARTIFACT; claude \"$P\" --permission-mode acceptEdits --add-dir \"$D\""
+RUN="unset CLAUDE_CODE_DISABLE_ARTIFACT CLAUDE_CODE_CHILD_SESSION; export CLAUDE_CODE_FORCE_SESSION_PERSISTENCE=1; claude \"$P\" --permission-mode acceptEdits --add-dir \"$D\""
 [ -n "$SH" ] && RUN="$SH '$RUN'"
-env -u CLAUDE_CODE_DISABLE_ARTIFACT tmux new-session -d -s "$S" -x 200 -y 50 -c "$CWD" "$RUN" || { echo "tmux failed" >&2; exit 1; }
+env -u CLAUDE_CODE_DISABLE_ARTIFACT -u CLAUDE_CODE_CHILD_SESSION tmux new-session -d -s "$S" -x 200 -y 50 -c "$CWD" "$RUN" || { echo "tmux failed" >&2; exit 1; }
 J=""; OUT=""
 for ((i=0; i<TO/2; i++)); do
   tmux has-session -t "$S" 2>/dev/null || { OUT=${OUT:-"ERROR: side session exited early"}; break; }

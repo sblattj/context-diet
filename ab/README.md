@@ -19,7 +19,7 @@ cd ab
 # 1. Mine. Pass your transcript dir as an argument (nothing is hardcoded).
 python3 mine.py "$HOME/.claude/projects" --out work/candidates.jsonl --days 30 --max-negatives 150
 ```
-A user prompt whose turn called `Skill(x)` is a positive labelled `x` (several skills in one turn: any is accepted). Short prompts whose turn called no skill are negatives. Positives that literally name the skill get `explicit: true`. Typed slash commands, tool results, meta/caveat messages and subagent (sidechain) turns are skipped; prompts are de-duplicated.
+A user prompt whose turn called `Skill(x)` is a positive labelled `x` (several skills in one turn: any is accepted). Short prompts whose turn called no skill are negatives. Positives that literally name the skill get `explicit: true`. Typed slash commands, tool results, meta/caveat messages and subagent (sidechain) turns are skipped; prompts are de-duplicated. Headless sessions (`claude -p`, SDK: any `entrypoint` other than `cli`) are skipped too, because those are your own A/B and eval runs; `--include-headless` keeps them.
 
 ```sh
 # 2. Filter with a cheap judge (batches of 25; keeps prompts understandable without prior context)
@@ -39,6 +39,8 @@ Appends `"synthetic": true` positives (same schema, `explicit: false`) to `cases
 python3 make_arms.py --skills-dir "$HOME/.claude/skills" --out work/arms \
     --arm before --arm after --set 'after:jira-*=name-only' --set 'after:rarely-used=name-only'
 # states: on | name-only | user-invocable-only | off. --set is ARM:GLOB=STATE, applied in order.
+# To compare against your setup as it is today, start every arm from your settings:
+#   --base-settings ~/.claude/settings.json --arm current --arm after --set 'after:x=name-only'
 
 # 4. Run (resumable; re-run the same command after an interruption)
 python3 run.py --cases work/cases.jsonl --arms work/arms --out work/results.jsonl --reps 2 --workers 3
