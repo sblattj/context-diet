@@ -67,6 +67,7 @@ Caveats: the tier is a suggestion from usage counts alone. `user-invocable-only`
 ```bash
 audit/skill-lint.py ~/.claude/skills            # scans every SKILL.md below
 audit/skill-lint.py path/to/SKILL.md --cap 400
+audit/skill-lint.py ~/.claude/skills --settings ~/.claude/settings.json   # skip name-only / hidden skills (their description never loads)
 ```
 
 Exits 0 when clean, 1 when any skill's `description` + `when_to_use` exceeds the cap (default 600 characters), 2 on usage errors. For each violation it prints the lengths and suggests keeping the core sentence in the description and moving extra trigger phrases to a `## More triggers` section in the body, which loads only after the skill fires. In a trigger check, trimmed descriptions with the overflow moved there still fired 9 of 9 times. The linter reports only; it does not rewrite files.

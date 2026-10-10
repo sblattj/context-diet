@@ -190,7 +190,7 @@ A listed description is paid in every session and every subagent that has the Sk
 
 Result: trimming 9 long descriptions to 600 chars or less kept every one firing on plain-word prompts (27/27 over 3 reps).
 
-`audit/skill-lint.py` flags over-cap descriptions and listed descriptions that name a hidden skill.
+`audit/skill-lint.py --settings ~/.claude/settings.json` flags over-cap descriptions on fully listed skills; `audit/audit.py` also flags listed descriptions that name a hidden skill.
 
 ### 7. Tier the built-in skills too
 
@@ -356,7 +356,7 @@ Build it only if step 12 shows recall dropping. On our setup, name-only skills w
 - [ ] Apply skill tiers from the rules (`audit/audit.py`). Keep look-alikes listed.
 - [ ] Set rarely used built-in skills to `name-only`.
 - [ ] Trim listed descriptions to 600 chars; overflow to `## More triggers`; scope sentences on greedy skills.
-- [ ] Run `audit/skill-lint.py`; reword any listed description that names a hidden skill.
+- [ ] Run `audit/skill-lint.py --settings ~/.claude/settings.json` and `audit/audit.py`; reword any listed description that names a hidden skill.
 - [ ] Rename opaque name-only skills to trigger-shaped names; A/B with `ab/make_rename_arms.py`.
 - [ ] Export `CLAUDE_CODE_DISABLE_ARTIFACT=1` in your shell rc (not the settings key); publish via `tools/publish-artifact.sh`.
 - [ ] Probe other heavy built-in tools with `measure/probe-interactive.sh --disallowedTools X`.

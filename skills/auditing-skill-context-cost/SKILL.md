@@ -6,7 +6,7 @@ description: "Find which skills to fully list, list by name only, or hide (skill
 ```bash
 python3 ${CLAUDE_PLUGIN_ROOT}/audit/skill-usage.py -o /tmp/usage.csv     # interactive sessions only (--include-headless to count -p runs)
 python3 ${CLAUDE_PLUGIN_ROOT}/audit/audit.py /tmp/usage.csv              # suggested skillOverrides changes, read-only
-python3 ${CLAUDE_PLUGIN_ROOT}/audit/skill-lint.py ~/.claude/skills       # description + when_to_use over 600 chars
+python3 ${CLAUDE_PLUGIN_ROOT}/audit/skill-lint.py ~/.claude/skills --settings ~/.claude/settings.json   # fully listed skills over 600 chars
 ```
 
 - Built-in skills (/loop, /init, dataviz...) obey skillOverrides too but aren't on disk; find them in the `skill_listing` block.
