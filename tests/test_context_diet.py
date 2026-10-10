@@ -209,7 +209,9 @@ class SkillUsageTests(TmpCase):
 
     def test_counts_and_tiers(self):
         rows, out = self.rows()
-        self.assertEqual(out.splitlines()[0], ",".join(usage.HEADER))
+        self.assertEqual(out.splitlines()[0], ",".join(usage.HEADER + ["auto_tool_use", "typed_slash"]))
+        self.assertEqual(rows["alpha"]["auto_tool_use"], rows["alpha"]["model_invocations"])
+        self.assertEqual(rows["beta"]["typed_slash"], rows["beta"]["typed_invocations"])
         self.assertEqual(rows["alpha"]["model_invocations"], "2")
         self.assertEqual(rows["alpha"]["last_used"], "2026-01-30")
         self.assertEqual(rows["alpha"]["suggested_tier"], "keep")
@@ -236,6 +238,13 @@ class SkillUsageTests(TmpCase):
             self.assertEqual(rc, 0, err)
             rows = {r["skill"]: r for r in csv.DictReader(io.StringIO(out))}
             self.assertEqual(rows["alpha"]["model_invocations"], want)
+
+    def test_no_legacy_columns_flag(self):
+        proj, skills = self.build()
+        rc, out, err = self.run_main(usage, [proj, "--all-projects", "--skills-dir", skills, "--now", NOW,
+                                             "--no-legacy-columns"])
+        self.assertEqual(rc, 0, err)
+        self.assertEqual(out.splitlines()[0], ",".join(usage.HEADER))
 
     def test_missing_dir(self):
         rc, _, err = self.run_main(usage, [os.path.join(self.tmp, "nope")])

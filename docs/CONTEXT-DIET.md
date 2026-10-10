@@ -57,6 +57,14 @@ audit/skill-usage.py /path/to/projects --skills-dir /path/to/skills -o usage.csv
 
 It scans transcript `.jsonl` files for `Skill` tool calls (model invocations) and `<command-name>` markers (typed slash commands), joins them with the `SKILL.md` files on disk, and writes CSV: `skill, model_invocations, typed_invocations, invocations, last_used, description_length, suggested_tier`. `--window-days` (default 30) and `--cap` (default 600) tune the tiers.
 
+The CSV also carries two deprecated alias columns, `auto_tool_use` and `typed_slash` (the pre-packaging names for `model_invocations` and `typed_invocations`), so readers written against the old file keep working; `--no-legacy-columns` drops them. Anything that reads the file should call `audit/usage_csv.py`'s `load_usage(path)` instead of indexing by column name: it accepts both header sets, parses the counts and fills `invocations`, and raises `UsageSchemaError` naming the columns it found when the file is not a usage CSV. `audit.py` uses it.
+
+| Old column (schema 1) | Now |
+|---|---|
+| `auto_tool_use` | `model_invocations` |
+| `typed_slash` | `typed_invocations` |
+| `override`, `sessions` | dropped (`audit.py` reads overrides from `settings.json`) |
+
 | Tier | Rule | Suggested override |
 |---|---|---|
 | `keep` | Used in the window, listing within the cap | none |
