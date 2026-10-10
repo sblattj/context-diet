@@ -323,10 +323,39 @@ class RunReportTests(FakeClaudeCase):
         import contextlib
         buf = io.StringIO()
         with contextlib.redirect_stdout(buf):
-            quick_ab.main(["--prompts", self.p("p.tsv"), "--a", self.p("arms/a_before.json"),
+            rc = quick_ab.main(["--prompts", self.p("p.tsv"), "--a", self.p("arms/a_before.json"),
                            "--b", self.p("arms/b_after.json"), "--reps", "2", "--model", M])
+        self.assertEqual(rc, 0)
+        self.assertNotIn("errored runs", buf.getvalue())
         self.assertIn("A deploy", buf.getvalue())
         self.assertIn("only A hit: 2, only B hit: 0, exact McNemar p = 0.5", buf.getvalue())
+
+    def test_quick_ab_errored_runs_excluded(self):
+        import quick_ab
+        import io
+        import contextlib
+        with open(self.p("p.tsv"), "w") as f:
+            f.write("deploy\tplease deploy it\ndeploy\tdeploy again\n")
+        wrapper = self.p("flaky")  # arm B's settings file makes the binary exit nonzero
+        with open(wrapper, "w") as f:
+            f.write("#!/bin/sh\ncase \"$*\" in *b_after*) echo boom >&2; exit 1;; esac\n"
+                    "exec %s \"$@\"\n" % os.path.join(self.dir, "claude"))
+        os.chmod(wrapper, 0o755)
+        out, errbuf = io.StringIO(), io.StringIO()
+        with contextlib.redirect_stdout(out), contextlib.redirect_stderr(errbuf):
+            rc = quick_ab.main(["--prompts", self.p("p.tsv"), "--a", self.p("arms/a_before.json"),
+                                "--b", self.p("arms/b_after.json"), "--reps", "2", "--model", M,
+                                "--claude-bin", wrapper])
+        o = out.getvalue()
+        self.assertEqual(rc, 2)
+        self.assertIn("errored runs: A 0, B 4 (excluded from the counts above)", o)
+        self.assertIn("B deploy                   0/0 (2 err) (no ok runs, left out of McNemar)", o)
+        # an arm with no ok runs must not read as "only A hit"
+        self.assertIn("only A hit: 0, only B hit: 0", o)
+        self.assertIn("prompts left out of McNemar (an arm had no ok runs): 2", o)
+        self.assertIn("arm A: 4/4 runs hit", o)
+        self.assertIn("arm B: 0/0 runs hit (Wilson95 n/a)", o)
+        self.assertIn("error:", errbuf.getvalue())
 
 
 if __name__ == "__main__":
