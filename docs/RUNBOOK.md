@@ -47,6 +47,8 @@ Block changes are chars / 4, so approximate. Totals are exact. "After" is four f
 
 A subagent pays the whole prefix again when it starts. Fan out ten general-purpose agents and you pay roughly 350k tokens of setup before any of them reads a file.
 
+Paths below use `~/.claude`. If you set `CLAUDE_CONFIG_DIR`, every script here reads that directory instead.
+
 ## Measure first
 
 Get the real start number before you change anything. Two methods, used for different things.
@@ -55,14 +57,14 @@ Get the real start number before you change anything. Two methods, used for diff
 
 Your history already has the answer. For each main-session JSONL under `~/.claude/projects/<project>/`, take the first assistant record's usage: `input_tokens + cache_creation_input_tokens + cache_read_input_tokens`. Keep sessions whose first prompt is short and plain. The `attachment` records before that turn show each block's size (`skill_listing`, instructions, MCP instructions, agent listing).
 
-- `measure/start_tokens.py` does this over your session logs and prints the total plus per-block sizes.
+- `measure/start_tokens.py` does this over your session logs and prints the total, per-block sizes and the median start. By default it reads only the current project's sessions (run it from the project you care about); `--project PATH` picks another, `--all-projects` reads all. Resumed or compacted sessions ("This session is being continued...") and non-`cli` entrypoints are left out of the list and the median.
 - `measure/probe-interactive.sh` opens a fresh interactive session with a one-line prompt (optionally with extra flags like `--disallowedTools X`) and reads its first turn. Use it for an exact "after" number.
 
 `/context` also works, but it reports per-category estimates.
 
 ### Headless ablation: what each part costs
 
-`measure/ablate.sh [model]` runs a trivial prompt with `claude -p --output-format json`, then switches off one part at a time (MCP, memory, skills, everything down to the floor). The drop is that part's cost. Results land in a JSONL you can tail.
+`measure/ablate.sh -m MODEL_ID` (the model is required; name an explicit id) runs a trivial prompt with `claude -p --output-format json`, then switches off one part at a time (MCP, memory, skills, everything down to the floor). The drop is that part's cost. Results land in a JSONL you can tail.
 
 - MCP = base minus no-mcp
 - memory = base minus no-memory (`CLAUDE_CODE_DISABLE_CLAUDE_MDS=1`)
@@ -105,7 +107,12 @@ Every session is a JSONL under `~/.claude/projects/`. Two signals per skill:
 - Auto: an assistant `tool_use` block named `Skill`, with `input.skill` naming it. Claude picked it.
 - Typed: a user message containing `<command-name>/name</command-name>`. You asked for it.
 
-`audit/skill-usage.py` counts both per skill over the last 30 days, plus MCP calls per server (`mcp__<server>__<tool>`).
+`audit/skill-usage.py` counts both per skill (recency window `--window-days`, default 30). It reads the current project's sessions by default; skill usage is global, so pass `--all-projects` for tiering decisions. It does not count MCP calls. For a rough per-server count, grep the `tool_use` records:
+
+```sh
+grep -rhoE '"type":"tool_use","id":"[^"]*","name":"mcp__[^"]+' "${CLAUDE_CONFIG_DIR:-$HOME/.claude}/projects" \
+  | sed -E 's/.*"name":"mcp__//; s/__.*//' | sort | uniq -c | sort -rn
+```
 
 Filter out your own test runs. After a few A/B rounds, one skill went from 4 uses to 59. Skip headless sessions (`"entrypoint":"sdk-cli"`) whose first prompt matches a test prompt, and run A/Bs from a dedicated directory so you can filter by project path.
 
@@ -251,7 +258,7 @@ Blocks between installer markers (`<!-- tool:start -->` ... `<!-- tool:end -->`)
 
 ### 11. Prune MCP servers
 
-With tool search on (the default), each MCP tool costs one line until used, but every server's instructions block loads in full. Count calls per server (step 3) and drop the zeros.
+With tool search on (the default), each MCP tool costs one line until used, but every server's instructions block loads in full. Count calls per server (the grep in step 3) and drop the zeros.
 
 ```jsonc
 // ~/.claude/settings.json: block individual claude.ai connectors by name
@@ -349,14 +356,14 @@ Build it only if step 12 shows recall dropping. On our setup, name-only skills w
 
 - [ ] Back up settings.json, CLAUDE.md and the skills folder.
 - [ ] Record the real start: `measure/start_tokens.py` on recent short-prompt sessions.
-- [ ] Run `measure/ablate.sh`; write down base, MCP, memory and floor.
+- [ ] Run `measure/ablate.sh -m MODEL_ID`; write down base, MCP, memory and floor.
 - [ ] Spawn one default subagent and read its first-turn usage.
-- [ ] Mine 30 days with `audit/skill-usage.py`. Filter out test runs.
+- [ ] Mine 30 days with `audit/skill-usage.py --all-projects`. Filter out test runs.
 - [ ] Install `agents/lean.md`, add the default-to-lean rule to CLAUDE.md. Restart.
 - [ ] Apply skill tiers from the rules (`audit/audit.py`). Keep look-alikes listed.
 - [ ] Set rarely used built-in skills to `name-only`.
 - [ ] Trim listed descriptions to 600 chars; overflow to `## More triggers`; scope sentences on greedy skills.
-- [ ] Run `audit/skill-lint.py --settings ~/.claude/settings.json` and `audit/audit.py`; reword any listed description that names a hidden skill.
+- [ ] Run `audit/skill-lint.py --settings ~/.claude/settings.json` (or your `$CLAUDE_CONFIG_DIR`) and `audit/audit.py`; reword any listed description that names a hidden skill.
 - [ ] Rename opaque name-only skills to trigger-shaped names; A/B with `ab/make_rename_arms.py`.
 - [ ] Export `CLAUDE_CODE_DISABLE_ARTIFACT=1` in your shell rc (not the settings key); publish via `tools/publish-artifact.sh`.
 - [ ] Probe other heavy built-in tools with `measure/probe-interactive.sh --disallowedTools X`.

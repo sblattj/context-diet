@@ -3,7 +3,7 @@
 
 The issue's run added 14 synthetic positives on top of 45 mined ones. This step
 automates that: for each skill in --skills-dir with fewer than --min-positives
-positives in cases.jsonl, ask a cheap model (default haiku, via the same
+positives in cases.jsonl, ask the --model you name (required, via the same
 _claude.py call path as filter.py: deadline, bounded output, API key stripped)
 for --per-skill realistic plain-language prompts that should trigger the skill
 WITHOUT naming it. Each is appended to cases.jsonl as
@@ -86,7 +86,7 @@ def main(argv=None):
     ap.add_argument("--arms", nargs="*", default=[], help="arm .json files; skills hidden from the model in any are skipped")
     ap.add_argument("--min-positives", type=int, default=1, help="generate for skills with fewer positives than this (default 1 = none mined)")
     ap.add_argument("--per-skill", type=int, default=2, help="prompts per skill (the issue gives only a total of 14)")
-    ap.add_argument("--model", default="haiku")
+    ap.add_argument("--model", required=True, type=_claude.model_arg, help="generator model id (required)")
     ap.add_argument("--deadline", type=float, default=120)
     ap.add_argument("--keep-api-key", action="store_true")
     ap.add_argument("--claude-bin", default="claude")

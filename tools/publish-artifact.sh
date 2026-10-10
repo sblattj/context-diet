@@ -18,7 +18,7 @@ F=$(cd "$(dirname "$F")" && pwd -P)/$(basename "$F"); [ -f "$F" ] || { echo "no 
 case "$F$URL" in *[\'\"]*) echo "no quotes in path/url" >&2; exit 2;; esac
 D=$(dirname "$F"); CWD=$(cd "${PUBLISH_CWD:-$HOME}" && pwd -P); SH=${LAUNCH_SHELL:-}
 LOG=${PUBLISH_LOG:-/tmp/publish-artifact.log}; TAG="pubart-$(date +%s)-$$"; S="pubart$$"
-PROJ=$HOME/.claude/projects/$(printf '%s' "$CWD" | sed 's#[^A-Za-z0-9]#-#g')
+PROJ=${CLAUDE_CONFIG_DIR:-$HOME/.claude}/projects/$(printf '%s' "$CWD" | sed 's#[^A-Za-z0-9]#-#g')
 if [ -n "$URL" ]; then ACT="Read $URL with the Artifact tool (action read), then republish $F to that same url"
 else ACT="Publish $F with the Artifact tool (one short generic icon word)"; fi
 P="$ACT. Do not edit the file. Then reply with only the artifact URL on one line. [$TAG]"

@@ -6,7 +6,7 @@ description: "Get the real number of tokens a Claude Code session starts with, s
 Run from the plugin root (`${CLAUDE_PLUGIN_ROOT}`):
 
 ```bash
-python3 ${CLAUDE_PLUGIN_ROOT}/measure/start_tokens.py              # newest 5 interactive sessions
+python3 ${CLAUDE_PLUGIN_ROOT}/measure/start_tokens.py              # newest 5 fresh interactive sessions of the current project (--project PATH, --all-projects)
 python3 ${CLAUDE_PLUGIN_ROOT}/measure/start_tokens.py --last 20 --json
 LAUNCH_SHELL="zsh -ic" PROBE_CWD=<trusted dir> ${CLAUDE_PLUGIN_ROOT}/measure/probe-interactive.sh Artifact Workflow   # per-tool cost
 ${CLAUDE_PLUGIN_ROOT}/measure/ablate.sh --list                      # headless component ablation

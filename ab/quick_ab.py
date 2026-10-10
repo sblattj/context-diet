@@ -6,7 +6,7 @@ quick version: hand-written plain-language prompts, two settings files, count Sk
 
 Prompts file: one per line, `skill-name<TAB>prompt` (blank lines and # comments ignored).
 Example:
-  quick_ab.py --prompts prompts.tsv --a before.json --b after.json --reps 3
+  quick_ab.py --prompts prompts.tsv --a before.json --b after.json --reps 3 --model MODEL_ID
 Prints hits per arm and the exact McNemar p over per-prompt majority outcomes.
 Reuses run.py (stream parsing, deadline, API-key stripping) and report.py (stats).
 """
@@ -46,7 +46,7 @@ def main(argv=None):
     ap.add_argument("--a", required=True, help="settings.json for arm A (baseline)")
     ap.add_argument("--b", required=True, help="settings.json for arm B")
     ap.add_argument("--reps", type=int, default=3)
-    ap.add_argument("--model", default=None)
+    ap.add_argument("--model", required=True, type=_claude.model_arg, help="model id for the runs (required)")
     ap.add_argument("--max-turns", type=int, default=2)
     ap.add_argument("--deadline", type=float, default=180)
     ap.add_argument("--cwd", default=None)

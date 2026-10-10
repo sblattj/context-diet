@@ -1,7 +1,7 @@
 #!/usr/bin/env python3
 """Run each case under each arm N times and record which Skill(s) fired.
 
-Per run:  claude -p PROMPT --settings ARM.json --tools Skill Read Grep Glob
+Per run:  claude -p PROMPT --model MODEL --settings ARM.json --tools Skill Read Grep Glob
           --strict-mcp-config --mcp-config '{"mcpServers":{}}' --max-turns 2
           --output-format stream-json --verbose
 Read-only tools and no MCP keep runs side-effect free.
@@ -154,7 +154,7 @@ def main(argv=None):
     ap.add_argument("--arms", required=True, nargs="+", help="arm .json files, or a make_arms.py output dir (order.txt gives order); first = baseline")
     ap.add_argument("--out", required=True, help="append-only results.jsonl")
     ap.add_argument("--reps", type=int, default=2)
-    ap.add_argument("--model", default=None, help="model for the runs (default: CLI default)")
+    ap.add_argument("--model", required=True, type=_claude.model_arg, help="model id for the runs (required)")
     ap.add_argument("--max-turns", type=int, default=2)
     ap.add_argument("--tools", nargs="+", default=DEFAULT_TOOLS)
     ap.add_argument("--deadline", type=float, default=180, help="per-call wall-clock seconds")

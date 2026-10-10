@@ -12,10 +12,11 @@ Rules:
   rare and fully listed (or undecided)             -> name-only if used or newer than --new-days, else user-invocable-only
   anything else                                    -> keep the explicit decision
 
-Usage: audit.py USAGE.csv [--settings ~/.claude/settings.json] [--skills-dir ~/.claude/skills]
+Usage: audit.py USAGE.csv [--settings <config>/settings.json] [--skills-dir <config>/skills]
                 [--cap 600] [--rare 3] [--new-days 30]
 Built-in and plugin skills (e.g. /loop, /init) are not on disk, so they don't appear here,
 but skillOverrides still works on them; check the skill_listing block (measure/start_tokens.py).
+<config> is $CLAUDE_CONFIG_DIR if set, else ~/.claude.
 """
 import argparse
 import csv
@@ -27,6 +28,8 @@ import sys
 import time
 
 sys.path.insert(0, os.path.dirname(os.path.abspath(__file__)))
+sys.path.insert(0, os.path.join(os.path.dirname(os.path.dirname(os.path.abspath(__file__))), "lib"))
+import ccpaths  # noqa: E402
 import skill_meta  # noqa: E402
 
 HIDDEN = ("user-invocable-only", "off")
@@ -48,13 +51,14 @@ def suggest(model, typed, cur, explicit, age_days, rare, new_days):
 def main(argv=None):
     ap = argparse.ArgumentParser(description=__doc__, formatter_class=argparse.RawDescriptionHelpFormatter)
     ap.add_argument("usage_csv")
-    ap.add_argument("--settings", default="~/.claude/settings.json")
-    ap.add_argument("--skills-dir", default="~/.claude/skills")
+    ap.add_argument("--settings", help="default: <config>/settings.json")
+    ap.add_argument("--skills-dir", help="default: <config>/skills")
     ap.add_argument("--cap", type=int, default=600)
     ap.add_argument("--rare", type=int, default=3)
     ap.add_argument("--new-days", type=int, default=30)
     a = ap.parse_args(argv)
-    sp, sd = os.path.expanduser(a.settings), os.path.expanduser(a.skills_dir)
+    sp = os.path.expanduser(a.settings or ccpaths.config_path("settings.json"))
+    sd = os.path.expanduser(a.skills_dir or ccpaths.config_path("skills"))
     ov = json.load(open(sp)).get("skillOverrides", {}) if os.path.exists(sp) else {}
     use = {r["skill"]: r for r in csv.DictReader(open(a.usage_csv))}
     now, rows, over, listed = time.time(), [], [], {}

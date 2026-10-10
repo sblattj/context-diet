@@ -12,6 +12,13 @@ Tiers (see docs/CONTEXT-DIET.md):
   trim                 used in the window but description+when_to_use exceeds the cap
   user-invocable-only  only ever typed as /name, never invoked by the model
   name-only            not used in the window (or never): list the name only
+
+Scope: by default only the CURRENT project's sessions are read
+(<config>/projects/<slug of cwd>, config = $CLAUDE_CONFIG_DIR or ~/.claude).
+--project PATH picks another project, --all-projects reads every project. An explicit
+transcript root is scoped the same way, unless it directly holds .jsonl files (one
+project's session dir), which is read as-is. Skill usage is global, so for tiering
+decisions you usually want --all-projects.
 """
 import argparse
 import csv
@@ -23,6 +30,8 @@ import re
 import sys
 
 sys.path.insert(0, os.path.dirname(os.path.abspath(__file__)))
+sys.path.insert(0, os.path.join(os.path.dirname(os.path.dirname(os.path.abspath(__file__))), "lib"))
+import ccpaths  # noqa: E402
 import skill_meta  # noqa: E402
 
 CMD_RE = re.compile(r"<command-name>\s*/?([^<\s]+)\s*</command-name>")
@@ -31,11 +40,11 @@ HEADER = ["skill", "model_invocations", "typed_invocations", "invocations",
 
 
 def default_projects_dir():
-    return os.path.join(os.path.expanduser("~"), ".claude", "projects")
+    return ccpaths.projects_dir()
 
 
 def default_skill_dirs():
-    return [os.path.join(os.path.expanduser("~"), ".claude", "skills")]
+    return [ccpaths.config_path("skills")]
 
 
 def _text_of(content):
@@ -144,20 +153,27 @@ def main(argv=None):
                                  formatter_class=argparse.RawDescriptionHelpFormatter,
                                  epilog=__doc__.split("\n\n", 1)[1])
     ap.add_argument("projects_dir", nargs="?", default=None,
-                    help="transcript root (default: ~/.claude/projects)")
+                    help="projects root (default: $CLAUDE_CONFIG_DIR/projects or ~/.claude/projects), "
+                         "or one project's session dir")
     ap.add_argument("--skills-dir", action="append", default=None,
-                    help="directory of <name>/SKILL.md (repeatable; default ~/.claude/skills)")
+                    help="directory of <name>/SKILL.md (repeatable; default <config>/skills)")
     ap.add_argument("--window-days", type=int, default=30, help="recency window (default 30)")
     ap.add_argument("--cap", type=int, default=600, help="description+when_to_use cap (default 600)")
     ap.add_argument("--now", help="ISO timestamp to treat as now (for reproducible runs)")
     ap.add_argument("-o", "--output", help="write CSV here instead of stdout")
     ap.add_argument("--include-headless", action="store_true",
                     help="also count `claude -p` / SDK runs (default: interactive sessions only)")
+    ccpaths.add_scope_args(ap)
     a = ap.parse_args(argv)
 
     root = a.projects_dir or default_projects_dir()
     if not os.path.isdir(root):
         print("no such transcript directory: %s" % root, file=sys.stderr)
+        return 2
+    try:
+        root = ccpaths.resolve_root(root, a.project, a.all_projects)
+    except ccpaths.ScopeError as e:
+        print(e, file=sys.stderr)
         return 2
     now = parse_ts(a.now) if a.now else dt.datetime.now(dt.timezone.utc)
     if now is None:

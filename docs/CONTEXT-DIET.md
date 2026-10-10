@@ -12,19 +12,19 @@ Every Claude Code session and subagent pays a startup cost before it does any wo
 ## Measure startup context: `ablate.sh`
 
 ```bash
-measure/ablate.sh                       # all variants, one prompt, one rep
-measure/ablate.sh -v baseline,floor -n 3 -e OK -o out/
-measure/ablate.sh -f prompts.txt --max-turns 4   # one prompt per line
+measure/ablate.sh -m MODEL_ID                       # all variants, one prompt, one rep
+measure/ablate.sh -m MODEL_ID -v baseline,floor -n 3 -e OK -o out/
+measure/ablate.sh -m MODEL_ID -f prompts.txt --max-turns 4   # one prompt per line
 measure/ablate.sh --list
 ```
 
-Each run is `claude -p <prompt> --output-format json` plus the variant's flags. Output is `<out>/<variant>.jsonl`, one row per (prompt, rep):
+`-m` is required: name an explicit model id (the bare alias `haiku` is rejected). Each run is `claude -p <prompt> --model <id> --output-format json` plus the variant's flags. Output is `<out>/<variant>.jsonl`, one row per (prompt, rep):
 
 | Field | Meaning |
 |---|---|
 | `start_tokens` | input + cache write + cache read: everything the model was given. The headline metric. |
 | `input_tokens`, `output_tokens`, `cache_read_tokens`, `cache_write_tokens` | Raw usage fields. |
-| `cost_usd`, `turns`, `duration_ms` | From the CLI result. |
+| `turns`, `duration_ms` | From the CLI result. |
 | `wall_ms` | Wall time measured around the process. |
 | `is_error`, `pass` | `pass` appears only with `--expect STR` and means the reply contains `STR`. |
 
@@ -34,7 +34,7 @@ Reading the results:
 
 - Compare each variant to `baseline`; the difference is that component's cost.
 - `floor` is the cheapest a session can start with your Claude Code version and system prompt.
-- Cache effects: the first run of a variant writes the cache, later runs read it. `start_tokens` sums both so the metric is stable, but `cost_usd` differs between a cold and a warm run. Use `-n 3` and compare medians.
+- Cache effects: the first run of a variant writes the cache, later runs read it. `start_tokens` sums both so the metric is stable, but the cache read/write split differs between a cold and a warm run. Use `-n 3` and compare medians.
 
 Caveats:
 
@@ -47,9 +47,13 @@ Caveats:
 ## Find skills to hide: `skill-usage.py`
 
 ```bash
-audit/skill-usage.py                          # ~/.claude/projects, ~/.claude/skills
+audit/skill-usage.py                          # current project's sessions, <config>/skills
+audit/skill-usage.py --all-projects -o usage.csv     # every project (what tiering usually wants)
+audit/skill-usage.py --project /path/to/repo         # one other project
 audit/skill-usage.py /path/to/projects --skills-dir /path/to/skills -o usage.csv
 ```
+
+`<config>` is `$CLAUDE_CONFIG_DIR` if set, else `~/.claude`. Sessions live in `<config>/projects/<slug>/`, where the slug is the project's absolute path with every non-alphanumeric character replaced by `-` (`/a/b.c` becomes `-a-b-c`). By default only the current directory's project is read, and a missing project dir exits 2 instead of silently reading everything. An explicit projects root is scoped the same way; a directory that directly holds `.jsonl` files is read as-is.
 
 It scans transcript `.jsonl` files for `Skill` tool calls (model invocations) and `<command-name>` markers (typed slash commands), joins them with the `SKILL.md` files on disk, and writes CSV: `skill, model_invocations, typed_invocations, invocations, last_used, description_length, suggested_tier`. `--window-days` (default 30) and `--cap` (default 600) tune the tiers.
 

@@ -9,4 +9,5 @@ Rename arms: `make_rename_arms.py` (names are the whole signal for name-only ski
 - Write test prompts with a writer that never saw the change, or the new arm wins by construction.
 - Label noise is the main risk: read negatives that fire before trusting the false-fire rate.
 - Rename only opaque names. Clear names lose ground when renamed, and old names stop working as /commands.
+- filter/synth/run/quick_ab require `--model` with an explicit model id (bare `haiku` is rejected). mine.py reads the current project unless `--all-projects`.
 - Every run is a real model call; unset ANTHROPIC_API_KEY to use your subscription (run.py strips it by default).

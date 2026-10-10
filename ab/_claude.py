@@ -4,6 +4,7 @@ Billing note: `claude -p` bills the API when ANTHROPIC_API_KEY is set. To use a
 subscription login, unset it. By default we strip it from the child env
 (disable with strip_api_key=False).
 """
+import argparse
 import json
 import os
 import signal
@@ -15,6 +16,23 @@ MAX_CAPTURE_BYTES = 8 * 1024 * 1024  # hard bound on captured stdout
 
 class ClaudeError(RuntimeError):
     pass
+
+
+BARE_ALIASES = ("haiku",)
+
+
+def model_arg(value):
+    """argparse type for --model: required by every script that calls a model, no implicit default.
+
+    The bare alias "haiku" is rejected (it silently tracks whatever the CLI maps it to);
+    name an explicit model id. Any other value is passed through to `claude --model`."""
+    v = (value or "").strip()
+    if not v:
+        raise argparse.ArgumentTypeError("--model must not be empty; name an explicit model id")
+    if v.lower() in BARE_ALIASES:
+        raise argparse.ArgumentTypeError(
+            'the bare alias "%s" is not accepted; pass an explicit model id instead' % v)
+    return v
 
 
 def child_env(strip_api_key=True, extra=None):
