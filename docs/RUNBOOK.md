@@ -10,7 +10,7 @@ This was written from one real pass on a heavy setup (74 skills, 8 MCP servers, 
 
 | What | Before | After | Notes |
 |---|---|---|---|
-| Subagent start | 42.3k | 9.6k | workflow subagent before, `lean` subagent after (-77%) |
+| Subagent start | 42.3k | 9.6k | workflow subagent before, `lean` subagent after (-77%); with a small CLAUDE.md, see step 4 |
 | Interactive session start | 53.8k | 34.7k | -35%, every session, every turn |
 | Same, plus 11 rare built-in skills to name-only | 34.7k | 32.9k | see step 7 |
 | Fresh start, Artifact tool off vs on | ~45k | ~30.2k | see step 9 |
@@ -75,7 +75,7 @@ Use `-p` for quick deltas only. Never report it as your start. Headless runs ski
 
 ### Measure a real subagent too
 
-Each agent type starts at a different size: 42.3k for a workflow subagent before, 34.8k general-purpose and 9.6k lean after. Compare like with like. Spawn one with a one-word task and read the first assistant turn's usage from `~/.claude/projects/<project>/<session>/subagents/agent-*.jsonl`.
+Each agent type starts at a different size: 42.3k for a workflow subagent before, 34.8k general-purpose and 9.6k lean after. Compare like with like. Spawn one with a one-word task, from a session started after your last change (one spawned from a session already open before a CLAUDE.md trim still measured the old size), and read the first assistant turn's usage from `~/.claude/projects/<project>/<session>/subagents/agent-*.jsonl`.
 
 Noise is about +/-200 tokens run to run. Repeat any run whose delta is under 500, and always run from the same directory, since project CLAUDE.md files change the number.
 
@@ -100,6 +100,8 @@ Settings, agent files, skill tiers and MCP denials show up in new sessions. A re
 
 Run "Measure first" above. Write down the real interactive start, the ablation parts, and one subagent start.
 
+If your settings.json or CLAUDE.md is generated from another source (a dotfiles render step, a symlinked template), run that render first so the baseline measures what is really installed. Make every later change in the source and re-render; an edit to the rendered file is overwritten on the next render.
+
 ### 3. Mine your usage
 
 Every session is a JSONL under `~/.claude/projects/`. Two signals per skill:
@@ -120,7 +122,7 @@ On our setup, 30 days showed 17 visible skills never used and 13 more used once 
 
 ### 4. Add a lean subagent
 
-Biggest single win. A custom agent type with a short tool allowlist skips built-in schemas, MCP and the skills listing. Ours starts at 9.6k vs ~43k for the old workflow subagent. Copy `agents/lean.md` to `~/.claude/agents/lean.md`:
+Biggest single win. A custom agent type with a short tool allowlist skips built-in schemas, MCP and the skills listing. Ours starts at 9.6k vs ~43k for the old workflow subagent. That 9.6k assumes a small CLAUDE.md: global memory loads into every subagent, lean ones included, so your CLAUDE.md adds on top. On a second setup a lean subagent started at 19.7k with a 36k-byte CLAUDE.md, and at 14.1k after trimming it to 19.5k bytes (step 10). Copy `agents/lean.md` to `~/.claude/agents/lean.md`:
 
 ```markdown
 ---
@@ -336,7 +338,9 @@ Build it only if step 12 shows recall dropping. On our setup, name-only skills w
 | Headless says 28k, real sessions start at 49k | `-p` skips interactive-only context (agent listing, output style, built-in and plugin skills, Artifact) | Report real first-turn usage; use `-p` only for per-part deltas |
 | "no-skills" run costs more than baseline | With skills off, Claude Code inlines the `workflow-authoring` skill (about 17k chars) into the Workflow tool, which outweighs the listing it dropped | Compare `no-workflow` with `no-skills` (`ablate.sh` does both) |
 | "Lean tools" and "no skills" look the same | Leaving `Skill` out of `--tools` also drops the listing | Change one thing per run |
-| Subagent numbers don't line up | Agent types start at different sizes (workflow 42.3k, general-purpose 34.8k, lean 9.6k) | Compare the same type; read usage from the transcript |
+| Subagent numbers don't line up | Agent types start at different sizes (workflow 42.3k, general-purpose 34.8k, lean 9.6k), and every type adds your CLAUDE.md on top | Compare the same type; read usage from the transcript |
+| Subagent didn't shrink after a CLAUDE.md edit | It was spawned from a session open before the edit (ours: 19.9k from the old session, 14.1k from a new one) | Spawn it from a new session |
+| Baseline or "after" number looks unchanged | settings.json or CLAUDE.md is rendered from another source (a dotfiles generator), and the render hasn't run, or it overwrote your edit | Run the render step before measuring, and edit the source, not the rendered file |
 | Artifact tool won't come back on | `enableArtifact: false` in settings wins over everything and hot-reloads into live sessions | Use the `CLAUDE_CODE_DISABLE_ARTIFACT=1` env export; publish via `tools/publish-artifact.sh` |
 | First session after re-enabling a tool still lacks it | Pre-warmed sessions keep the settings they started with | Open a second new session |
 | Usage counts jump after testing | A/B and ablation runs write session logs | Filter headless test sessions and the A/B cwd |
