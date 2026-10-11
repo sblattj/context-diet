@@ -21,13 +21,25 @@ fmt = a[a.index("--output-format") + 1]
 if "Skill: " in prompt and "Write " in prompt:
     name = prompt.split("Skill: ", 1)[1].split("\n", 1)[0]
     n = int(prompt.split("Write ", 1)[1].split(" ", 1)[0])
+    mode = os.environ.get("FAKE_SYNTH", "")
+    if mode == "short":
+        n = max(n - 1, 0)
     outs = ["please help with chore %s number %d" % (name[::-1], i) for i in range(n)]
+    if mode == "named":
+        outs[0] = "run the %s thing" % name
     print(json.dumps([{"type": "system"}, {"type": "result", "is_error": False, "result": "Here:\n" + json.dumps(outs)}]))
     sys.exit(0)
 if fmt == "json":
     # judge: keep ids whose prompt text does not contain "KEEPNOT"
     payload = json.loads(prompt.split("Prompts (JSON):\n", 1)[1])
     ids = [p["id"] for p in payload if "yes" != p["prompt"].strip().lower()]
+    # selftest fixture ids: st-k* should be kept, st-d* dropped. FAKE_JUDGE=bad inverts
+    # every verdict; FAKE_JUDGE=weak flips 3 of 12 (agreement 9, one below the default 10).
+    jm = os.environ.get("FAKE_JUDGE", "")
+    if any(p["id"].startswith("st-") for p in payload):
+        flips = {"bad": lambda i: True, "weak": lambda i: i in ("st-k01", "st-k02", "st-d01"),
+                 "edge": lambda i: i in ("st-k01", "st-d01")}.get(jm, lambda i: False)
+        ids = [p["id"] for p in payload if p["id"].startswith("st-k") != flips(p["id"])]
     res = {"type": "result", "is_error": False, "result": "```json\n%s\n```" % json.dumps(ids)}
     # newer CLIs emit a list of events; older emit the bare result object
     print(json.dumps([{"type": "system"}, res] if os.environ.get("FAKE_CLAUDE_LIST") else res))

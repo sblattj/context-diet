@@ -12,6 +12,7 @@ Each call has a wall-clock deadline (--deadline) and a bounded output size
 """
 import argparse
 import json
+import os
 import re
 import sys
 
@@ -64,17 +65,64 @@ def judge_batch(batch, model, deadline, strip_api_key=True, claude_bin="claude",
     return keep & {c["id"] for c in batch}
 
 
+FIXTURE = os.path.join(os.path.dirname(os.path.abspath(__file__)), "fixtures", "selftest", "filter.jsonl")
+
+
+def selftest(model, deadline, min_agree=10, strip_api_key=True, claude_bin="claude", out=None):
+    """Judge the committed fixture with `model`; print one PASS/FAIL line per check.
+
+    Returns (ok, calls). Guards against judge drift: a model that mislabels clear-cut
+    cases would silently bias which prompts reach the recall arms."""
+    out = out or sys.stderr
+    fixture = _claude.read_jsonl(FIXTURE)
+    total = len(fixture)
+    calls = 1
+    try:
+        keep = judge_batch(fixture, model, deadline, strip_api_key, claude_bin)
+    except (_claude.ClaudeError, ValueError, json.JSONDecodeError) as e:
+        print("selftest FAIL judge call: %s" % e, file=out)
+        return False, calls
+    print("selftest PASS judge call: reply parsed", file=out)
+    wrong = [c for c in fixture if (c["id"] in keep) != (c["expect"] == "keep")]
+    for c in wrong:
+        print("selftest   disagree %s: expected %s, judge said %s: %r" % (
+            c["id"], c["expect"], "keep" if c["id"] in keep else "drop", c["prompt"][:60]), file=out)
+    agree = total - len(wrong)
+    ok = agree >= min_agree
+    print("selftest %s agreement %d/%d (need >= %d)" % ("PASS" if ok else "FAIL", agree, total, min_agree), file=out)
+    return ok, calls
+
+
 def main(argv=None):
     ap = argparse.ArgumentParser(description=__doc__, formatter_class=argparse.RawDescriptionHelpFormatter)
-    ap.add_argument("candidates", help="candidates.jsonl from mine.py")
-    ap.add_argument("--out", required=True, help="kept cases .jsonl")
+    ap.add_argument("candidates", nargs="?", help="candidates.jsonl from mine.py")
+    ap.add_argument("--out", help="kept cases .jsonl")
     ap.add_argument("--model", required=True, type=_claude.model_arg, help="judge model id (required)")
     ap.add_argument("--batch-size", type=int, default=25)
     ap.add_argument("--deadline", type=float, default=120, help="per-call wall-clock seconds")
     ap.add_argument("--retries", type=int, default=1, help="retries per failed batch")
     ap.add_argument("--keep-api-key", action="store_true", help="do not strip ANTHROPIC_API_KEY")
     ap.add_argument("--claude-bin", default="claude")
+    ap.add_argument("--selftest", action="store_true",
+                    help="only run the judge on the committed fixture (12 labeled prompts); exit 0 on pass, 1 on fail")
+    ap.add_argument("--selftest-min", type=int, default=10,
+                    help="selftest passes at this many label agreements out of 12 (default 10)")
+    ap.add_argument("--no-selftest", action="store_true",
+                    help="skip the selftest that otherwise runs before a normal run")
     a = ap.parse_args(argv)
+
+    if a.selftest:
+        ok, _ = selftest(a.model, a.deadline, a.selftest_min, not a.keep_api_key, a.claude_bin)
+        return 0 if ok else 1
+    if not a.candidates or not a.out:
+        ap.error("candidates and --out are required (unless --selftest)")
+    st_calls = 0
+    if not a.no_selftest:
+        ok, st_calls = selftest(a.model, a.deadline, a.selftest_min, not a.keep_api_key, a.claude_bin)
+        if not ok:
+            print("ABORT: judge selftest failed for model %r; no candidates were judged. "
+                  "Fix the model or pass --no-selftest to skip." % a.model, file=sys.stderr)
+            return 1
 
     cands = _claude.read_jsonl(a.candidates)
     kept, failed = [], 0
@@ -95,7 +143,8 @@ def main(argv=None):
     with open(a.out, "w", encoding="utf-8") as fh:
         for c in kept:
             fh.write(json.dumps(c, ensure_ascii=False) + "\n")
-    print("kept %d of %d (%d batches failed) -> %s" % (len(kept), len(cands), failed, a.out), file=sys.stderr)
+    print("kept %d of %d (%d batches failed; %d selftest calls) -> %s" % (
+        len(kept), len(cands), failed, st_calls, a.out), file=sys.stderr)
     return 1 if failed else 0
 
 

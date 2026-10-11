@@ -1,0 +1,12 @@
+{"id": "st-k01", "prompt": "Add a retry with exponential backoff to the fetch_invoices function in billing/client.py when the server returns a 503.", "expect": "keep"}
+{"id": "st-k02", "prompt": "Write a SQL migration that adds a nullable created_at timestamp column to the orders table and backfills it from updated_at.", "expect": "keep"}
+{"id": "st-k03", "prompt": "Explain why my Python unit test for parse_dates passes locally but fails in CI, which runs Python 3.9 instead of 3.12.", "expect": "keep"}
+{"id": "st-k04", "prompt": "Refactor the React component UserTable to use a custom hook for pagination instead of local state.", "expect": "keep"}
+{"id": "st-k05", "prompt": "Draft a git commit message for a change that renames the config key timeout_s to request_timeout_s across the codebase.", "expect": "keep"}
+{"id": "st-k06", "prompt": "Create a Dockerfile for a small Flask app that listens on port 8000 and installs dependencies from requirements.txt.", "expect": "keep"}
+{"id": "st-d01", "prompt": "yes", "expect": "drop"}
+{"id": "st-d02", "prompt": "do 2 and 3", "expect": "drop"}
+{"id": "st-d03", "prompt": "continue", "expect": "drop"}
+{"id": "st-d04", "prompt": "looks good, thanks", "expect": "drop"}
+{"id": "st-d05", "prompt": "fix that file like I said above", "expect": "drop"}
+{"id": "st-d06", "prompt": "Traceback (most recent call last):\n  File \"app.py\", line 10, in <module>\n    main()\nKeyError: 'id'", "expect": "drop"}
