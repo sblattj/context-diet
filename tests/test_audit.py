@@ -7,8 +7,15 @@ import audit  # noqa: E402
 
 
 class SuggestTests(unittest.TestCase):
-    def s(self, model, typed, cur, explicit=True, age=99):
-        return audit.suggest(model, typed, cur, explicit, age, rare=3, new_days=30)
+    def s(self, model, typed, cur, explicit=True, age=99, hide=True):
+        return audit.suggest(model, typed, cur, explicit, age, rare=3, new_days=30, hide=hide)
+
+    def test_default_only_lists_again(self):
+        self.assertEqual(self.s(0, 0, "on", explicit=False, hide=False), "on")
+        self.assertEqual(self.s(1, 0, "on", hide=False), "on")
+        self.assertEqual(self.s(0, 2, "on", explicit=False, hide=False), "on")
+        self.assertEqual(self.s(0, 0, "name-only", hide=False), "name-only")
+        self.assertEqual(self.s(5, 0, "name-only", hide=False), "on")
 
     def test_typed_only_default_on_goes_hidden(self):
         self.assertEqual(self.s(0, 2, "on", explicit=False), "user-invocable-only")
@@ -28,8 +35,26 @@ class SuggestTests(unittest.TestCase):
         self.assertEqual(self.s(0, 0, "user-invocable-only"), "user-invocable-only")
 
 
-if __name__ == "__main__":
-    unittest.main()
+class AgeTests(unittest.TestCase):
+    """Age is when git first added the skill, not the checkout time; untracked falls back to the folder."""
+
+    def test_git_add_date_beats_fresh_file_times(self):
+        import subprocess
+        import tempfile
+        import time
+        with tempfile.TemporaryDirectory() as d:
+            sk = os.path.join(d, "alpha")
+            os.makedirs(sk)
+            with open(os.path.join(sk, "SKILL.md"), "w") as f:
+                f.write("---\nname: alpha\ndescription: Short.\n---\n")
+            now = time.time()
+            self.assertLess(audit.age_days(sk, now), 1, "untracked: folder time")
+            env = dict(os.environ, GIT_AUTHOR_DATE="2026-01-01T00:00:00Z", GIT_COMMITTER_DATE="2026-01-01T00:00:00Z")
+            git = ["git", "-C", d, "-c", "user.name=t", "-c", "user.email=t@example.com"]
+            subprocess.run(git + ["init", "-q"], check=True)
+            subprocess.run(git + ["add", "alpha/SKILL.md"], check=True)
+            subprocess.run(git + ["commit", "-q", "-m", "add"], check=True, env=env)
+            self.assertGreater(audit.age_days(sk, now), 200)
 
 
 class LegacyCsvTests(unittest.TestCase):
@@ -60,6 +85,7 @@ class LegacyCsvTests(unittest.TestCase):
                                           "--skills-dir", os.path.join(d, "skills"), "--new-days", "0"])
             self.assertEqual(rc, 0, err)
             self.assertIn("| alpha | name-only | on | 5 | 0 | 2026-10-01 |", out)
+            self.assertIn("--hide adds hiding suggestions", out)
 
     def test_unknown_csv_exits_2_with_message(self):
         import tempfile
@@ -70,3 +96,7 @@ class LegacyCsvTests(unittest.TestCase):
             rc, out, err = self.run_main([csvp, "--settings", os.path.join(d, "none.json"), "--skills-dir", d])
             self.assertEqual(rc, 2)
             self.assertIn("not a usage CSV", err)
+
+
+if __name__ == "__main__":
+    unittest.main()
