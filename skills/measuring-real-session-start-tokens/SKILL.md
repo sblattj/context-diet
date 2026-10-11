@@ -14,5 +14,6 @@ ${CLAUDE_PLUGIN_ROOT}/measure/ablate.sh --list                      # headless c
 
 - Start = first assistant `usage` (input + cache_creation + cache_read). Only `entrypoint: cli` is a real start; `claude -p` reads ~21k low.
 - Compare fresh sessions with a one-line prompt. Resumed or compacted sessions start with their summary.
+- `probe-interactive.sh` exits 3 within `PROBE_START` (45s) if a session never receives its prompt; read the saved `<tag>.pane.txt` before retrying. Don't fall back to typing the prompt by hand: fix the launch.
 - Never measure with `--disallowedTools ToolSearch`: every MCP schema loads (49k became 101k).
 - Full method: `${CLAUDE_PLUGIN_ROOT}/docs/RUNBOOK.md`.
