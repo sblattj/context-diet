@@ -270,6 +270,10 @@ class RunReportTests(FakeClaudeCase):
         self.assertEqual(pr["regressions"][0][0], "deploy")
         text = report.render(rep)
         self.assertIn("exact McNemar p = 0.5", text)
+        sv = rep["savings"]["b_after"]  # fake claude reports identical tokens in both arms: all ties
+        self.assertEqual((sv["cheaper"], sv["costlier"], sv["p"]), (0, 0, 1.0))
+        self.assertAlmostEqual(sv["pct"], 0.0, places=9)
+        self.assertIn("b_after start tokens vs a_before: +0.0%", text)
 
     def test_synthetic_excluded_by_default(self):
         with open(self.p("cases.jsonl"), "a") as f:
