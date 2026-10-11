@@ -30,7 +30,7 @@ Or just clone and run the scripts. Python 3.9+, no dependencies; `tmux` for the 
 ```sh
 python3 measure/start_tokens.py                    # what do my last 5 sessions in this project start at?
 python3 audit/skill-usage.py --all-projects -o /tmp/usage.csv
-python3 audit/audit.py /tmp/usage.csv              # what to hide or list by name only
+python3 audit/audit.py /tmp/usage.csv --hide       # what to hide or list by name only (A/B before keeping)
 ```
 
 Scope and config: scripts read `$CLAUDE_CONFIG_DIR` if set, else `~/.claude`. Session readers (`start_tokens.py`, `skill-usage.py`, `ab/mine.py`) default to the current directory's project; use `--project PATH` for another one or `--all-projects` for all. If the project has no sessions they exit 2 rather than reading everything. Anything that calls a model (`ablate.sh`, `ab/filter.py`, `ab/synth.py`, `ab/run.py`, `ab/quick_ab.py`) requires `--model` with an explicit model id.
@@ -44,6 +44,7 @@ Then follow `docs/RUNBOOK.md`: change one lever, A/B it (`ab/README.md`), keep i
 - Never measure with `--disallowedTools ToolSearch`: every deferred MCP schema loads.
 - `name-only` skills are picked by name alone. Renaming 7 opaque names to trigger-shaped ones took recall on fresh prompts from 49% to 90% (McNemar p<0.0001). A `use-this-skill-when-` prefix added nothing.
 - Built-in skills obey `skillOverrides` too.
+- "Never used" is not "never needed". Hiding 25 never-used skills in one repo cut recall on prompts written for them from 17% to 9% and saved about 100 tokens, because the listing budget refills. `audit.py` only suggests hides with `--hide`; A/B them.
 
 ## Tests
 

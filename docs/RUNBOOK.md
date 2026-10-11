@@ -181,8 +181,9 @@ Decision rules (from step 3 counts):
 - 0 uses and older than 30 days: `user-invocable-only`.
 - Created in the last 30 days: `name-only` (probation), never hidden. Promote after 3 uses.
 - Keep any decision you made by hand. The rules only suggest.
+- Age is when git first added the skill, not the file time: a fresh clone or checkout makes every file look new.
 
-`audit/audit.py` prints these suggestions. It doesn't apply them.
+`audit/audit.py` prints these suggestions with `--hide`. It doesn't apply them. Without `--hide` it only suggests listing skills again, because "never used" is not "never needed": in one repo, a batch of 25 never-used skills went name-only and recall on prompts written for them fell from 17% to 9%, for a saving of about 100 tokens (the listing budget refilled). A/B every hide (`ab/README.md`) and keep only the ones where recall holds.
 
 Watch out for look-alikes. Hiding all but the top 15 took wrong picks from 2% to 7%, because Claude guessed a similarly named skill. Keep siblings (two "status" skills, two "review" skills) fully listed.
 
