@@ -15,6 +15,7 @@ report.py excludes synthetic cases by default so real recall is not inflated.
 """
 import argparse
 import json
+import os
 import re
 import sys
 
@@ -79,10 +80,37 @@ def generate(name, desc, n, model, deadline, strip_api_key=True, claude_bin="cla
     return parse_prompts(env.get("result", ""), n)
 
 
+FIXTURE = os.path.join(os.path.dirname(os.path.abspath(__file__)), "fixtures", "selftest", "synth.json")
+
+
+def selftest(model, deadline, strip_api_key=True, claude_bin="claude", out=None):
+    """Generate for the committed fixture skill; print one PASS/FAIL line per check.
+
+    Returns (ok, calls). Checks: parses, requested count, non-empty, skill name absent."""
+    out = out or sys.stderr
+    with open(FIXTURE, encoding="utf-8") as fh:
+        fx = json.load(fh)
+    n, name = fx["n"], fx["name"]
+    try:
+        prompts = generate(name, fx["description"], n, model, deadline, strip_api_key, claude_bin)
+    except (_claude.ClaudeError, ValueError, json.JSONDecodeError) as e:
+        print("selftest FAIL generate + parse_prompts accepted the reply: %s" % e, file=out)
+        return False, 1
+    checks = [
+        ("generate + parse_prompts accepted the reply", True),
+        ("returned %d prompts (got %d)" % (n, len(prompts)), len(prompts) == n),
+        ("every prompt non-empty", all(p.strip() for p in prompts)),
+        ("no prompt contains the skill name %r" % name, not any(name.lower() in p.lower() for p in prompts)),
+    ]
+    for label, good in checks:
+        print("selftest %s %s" % ("PASS" if good else "FAIL", label), file=out)
+    return all(g for _, g in checks), 1
+
+
 def main(argv=None):
     ap = argparse.ArgumentParser(description=__doc__, formatter_class=argparse.RawDescriptionHelpFormatter)
-    ap.add_argument("cases", help="cases.jsonl (from filter.py); synthetic cases are appended to it")
-    ap.add_argument("--skills-dir", required=True)
+    ap.add_argument("cases", nargs="?", help="cases.jsonl (from filter.py); synthetic cases are appended to it")
+    ap.add_argument("--skills-dir")
     ap.add_argument("--arms", nargs="*", default=[], help="arm .json files; skills hidden from the model in any are skipped")
     ap.add_argument("--min-positives", type=int, default=1, help="generate for skills with fewer positives than this (default 1 = none mined)")
     ap.add_argument("--per-skill", type=int, default=2, help="prompts per skill (the issue gives only a total of 14)")
@@ -91,7 +119,24 @@ def main(argv=None):
     ap.add_argument("--keep-api-key", action="store_true")
     ap.add_argument("--claude-bin", default="claude")
     ap.add_argument("--dry-run", action="store_true", help="list the skills that would get prompts, call nothing")
+    ap.add_argument("--selftest", action="store_true",
+                    help="only generate for the committed fixture skill and check the output; exit 0 on pass, 1 on fail")
+    ap.add_argument("--no-selftest", action="store_true",
+                    help="skip the selftest that otherwise runs before a normal run")
     a = ap.parse_args(argv)
+
+    if a.selftest:
+        ok, _ = selftest(a.model, a.deadline, not a.keep_api_key, a.claude_bin)
+        return 0 if ok else 1
+    if not a.cases or not a.skills_dir:
+        ap.error("cases and --skills-dir are required (unless --selftest)")
+    st_calls = 0
+    if not a.no_selftest and not a.dry_run:
+        ok, st_calls = selftest(a.model, a.deadline, not a.keep_api_key, a.claude_bin)
+        if not ok:
+            print("ABORT: generator selftest failed for model %r; nothing was generated. "
+                  "Fix the model or pass --no-selftest to skip." % a.model, file=sys.stderr)
+            return 1
 
     cases = _claude.read_jsonl(a.cases)
     counts = {}
@@ -130,7 +175,8 @@ def main(argv=None):
         with open(a.cases, "a", encoding="utf-8") as fh:
             for r in added:
                 fh.write(json.dumps(r, ensure_ascii=False) + "\n")
-    print("appended %d synthetic positives to %s (%d skills failed)" % (len(added), a.cases, failed), file=sys.stderr)
+    print("appended %d synthetic positives to %s (%d skills failed; %d selftest calls)" % (
+        len(added), a.cases, failed, st_calls), file=sys.stderr)
     return 1 if failed else 0
 
 
