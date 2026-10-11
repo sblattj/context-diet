@@ -59,6 +59,15 @@ class MemoryLintTests(unittest.TestCase):
         self.assertEqual([f["rule"] for f in fs], ["ML002"] * 3)
         self.assertTrue(all(f["severity"] == "warning" for f in fs))
 
+    def test_ml002_repo_root_relative_and_slash_commands(self):
+        # a nested instruction file citing a path from its repository root, and slash commands
+        self.w("repo/zsh/plugins/exports.zsh", "x\n")
+        p = self.w("repo/private/claude/AGENTS.md",
+                   "Set in `zsh/plugins/exports.zsh`. Run `/deploy` or `/sync-all`; see `zsh/none.zsh`.\n")
+        fs, _ = ml.lint([p])
+        self.assertEqual([(f["rule"], f["message"].rsplit(": ", 1)[-1]) for f in fs],
+                         [("ML002", "zsh/none.zsh")])
+
     def test_ml002_ignores_code_fence(self):
         p = self.w("CLAUDE.md", "```\n`docs/missing.md`\n@nope.md\n```\n")
         self.assertEqual(self.rules(p), [])

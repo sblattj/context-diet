@@ -66,6 +66,8 @@ def path_candidate(tok):
     tok = re.sub(r":\d+(-\d+)?$", "", tok)
     if not tok:
         return None
+    if tok.startswith("/") and "/" not in tok[1:] and "." not in tok:
+        return None  # a slash command such as /deploy, not a path
     if tok.startswith(("/", "~", "./", "../")):
         return tok if len(tok) > 1 else None
     # bare relative path: needs a slash and an extension on the last segment
@@ -76,6 +78,23 @@ def path_candidate(tok):
 
 def resolve(target, base_dir):
     return os.path.normpath(os.path.join(base_dir, os.path.expanduser(target)))
+
+
+def ref_exists(target, base_dir):
+    """True if target exists relative to base_dir or, for a bare relative path, any ancestor of it
+    (instruction files often cite paths from their repository root)."""
+    if os.path.exists(resolve(target, base_dir)):
+        return True
+    if target.startswith(("/", "~", "./", "../")):
+        return False
+    d = os.path.abspath(base_dir)
+    while True:
+        parent = os.path.dirname(d)
+        if parent == d:
+            return False
+        d = parent
+        if os.path.exists(os.path.join(d, target)):
+            return True
 
 
 def normalize(line):
@@ -136,7 +155,7 @@ def lint(roots):
                 if p is None:
                     continue
                 pointers += 1
-                if not os.path.exists(resolve(p, base)):
+                if not ref_exists(p, base):
                     findings.append(finding(
                         "ML002", path, i, "referenced path does not exist: %s" % tok,
                         "fix the path or drop the reference"))
