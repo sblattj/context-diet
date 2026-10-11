@@ -44,7 +44,7 @@ for l in open(sys.argv[1],errors='ignore'):
     if r.get('type')!='assistant' or r['message'].get('stop_reason')!='end_turn': continue
     for c in r['message'].get('content',[]):
         if c.get('type')=='text':
-            m=re.findall(r'https://claude\.ai/code/artifact/[0-9a-f-]+',c['text'])
+            m=re.findall(r'https://claude\.ai/(?:code/artifact/[0-9a-f-]+|artifact/[A-Za-z0-9_-]+)',c['text'])
             if m: out=m[-1]
 print(out)
 PY
