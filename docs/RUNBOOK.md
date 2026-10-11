@@ -109,12 +109,14 @@ Every session is a JSONL under `~/.claude/projects/`. Two signals per skill:
 - Auto: an assistant `tool_use` block named `Skill`, with `input.skill` naming it. Claude picked it.
 - Typed: a user message containing `<command-name>/name</command-name>`. You asked for it.
 
-`audit/skill-usage.py` counts both per skill (recency window `--window-days`, default 30). It reads the current project's sessions by default; skill usage is global, so pass `--all-projects` for tiering decisions. It does not count MCP calls. For a rough per-server count, grep the `tool_use` records:
+`audit/skill-usage.py` counts both per skill (recency window `--window-days`, default 30). It reads the current project's sessions by default; skill usage is global, so pass `--all-projects` for tiering decisions. It does not count MCP calls; `audit/mcp-usage.py` does. It reads the same transcripts with the same scoping flags (`--project`, `--all-projects`, `--window-days`, headless runs skipped), counts `mcp__<server>__<tool>` calls per server (a message split over several lines counts once), and joins them with the servers in your config (`~/.claude.json`, or `$CLAUDE_CONFIG_DIR/.claude.json`, plus the project's `.mcp.json`; override with `--config`):
 
 ```sh
-grep -rhoE '"type":"tool_use","id":"[^"]*","name":"mcp__[^"]+' "${CLAUDE_CONFIG_DIR:-$HOME/.claude}/projects" \
-  | sed -E 's/.*"name":"mcp__//; s/__.*//' | sort | uniq -c | sort -rn
+python3 audit/mcp-usage.py --all-projects          # table + deniedMcpServers block
+python3 audit/mcp-usage.py --all-projects --json   # or --csv
 ```
+
+Columns: server, calls in the window, last used, configured (yes/no), suggestion (`deny` for a configured server with 0 calls, else `keep`). Connector names with spaces or dots ("claude.ai Some Connector") show up in tool names as `claude_ai_Some_Connector`; the tool maps them back. Servers that were called but are not in a config file (claude.ai connectors, plugin servers) show `configured: no` and are listed under the table. Read-only.
 
 Filter out your own test runs. After a few A/B rounds, one skill went from 4 uses to 59. Skip headless sessions (`"entrypoint":"sdk-cli"`) whose first prompt matches a test prompt, and run A/Bs from a dedicated directory so you can filter by project path.
 
@@ -259,9 +261,33 @@ Global memory loads in every session and subagent. Keep invariants there (rules 
 
 Blocks between installer markers (`<!-- tool:start -->` ... `<!-- tool:end -->`) may get rewritten on upgrade. Keep the markers and re-check after upgrades.
 
+After shrinking, lint the always-loaded files so the savings do not silently erode:
+
+```sh
+python3 audit/memory-lint.py                  # global CLAUDE.md and its @imports
+python3 audit/memory-lint.py --project DIR    # plus DIR/CLAUDE.md and DIR/.claude/CLAUDE.md
+python3 audit/memory-lint.py FILE...          # explicit files only; add --json for machine output
+```
+
+Rules, each with file:line and a fix hint:
+
+- ML001 error: an `@` import whose target is missing.
+- ML002 warning: a backticked or linked file path that does not exist.
+- ML003 warning: an import cycle.
+- ML004 warning: the same instruction in more than one place (40+ chars, compared after stripping bullets and emphasis, case and spacing).
+- ML005 info: a file over 60 lines with no pointer to a skill or another file. Move procedures into skills.
+
+Code fences are ignored. Exit 1 only on ML001. There is deliberately no score or size threshold.
+
 ### 11. Prune MCP servers
 
-With tool search on (the default), each MCP tool costs one line until used, but every server's instructions block loads in full. Count calls per server (the grep in step 3) and drop the zeros.
+With tool search on (the default), each MCP tool costs one line until used, but every server's instructions block loads in full. Count calls per server with `python3 audit/mcp-usage.py --all-projects` (step 3) and drop the zeros. It prints a ready-to-paste block for the servers it suggests denying:
+
+```jsonc
+"deniedMcpServers": [{"serverName": "claude.ai Idle Thing"}]
+```
+
+Check the list before pasting: a server you only need seasonally, or one that has been idle because it was broken, also shows 0 calls.
 
 ```jsonc
 // ~/.claude/settings.json: block individual claude.ai connectors by name
@@ -310,6 +336,8 @@ Score it (`ab/report.py`):
 - About 450 runs and 20 minutes per round at 8 parallel jobs.
 - `ab/quick_ab.py` is the small version for a single-description check.
 
+Also build the control arm (`make_rename_arms.py ... --control`, see `ab/README.md`) so the report carries a `control ...: harness can detect loss: yes/no` line. If it says `no`, do not read "no regression" as a pass: the prompt set cannot detect loss.
+
 Most "wrong picks" were label noise. Read every miss before editing a description. And grep the file to confirm your edit landed before running the "after" arm.
 
 ### 13. Keep it lean
@@ -318,6 +346,7 @@ Skills pile up. Five new ones arrived during this pass and pushed the baseline b
 
 - New skills start `name-only`, with a trigger-shaped name and a description of 600 chars or less. Promote after real use.
 - Monthly audit: re-run `audit/skill-usage.py`, `audit/audit.py` and `audit/skill-lint.py`, and record the baseline with `measure/start_tokens.py`. Read-only: it suggests, you apply.
+- Pin what you saved so it cannot creep back: `python3 audit/size-ratchet.py --baseline ~/context-diet-baseline.json [--project DIR]`. The first run writes the baseline. Later runs print `GREW`/`NEW` lines and exit 1 when CLAUDE.md (imports included), `agents/*.md`, or a skill's listing cost grew; `SHRANK`/`GONE` do not fail. After a deliberate change, re-pin with `--update`. Run it from a hook or CI.
 - Schedule it with launchd, cron or systemd. Those don't load your shell profile, so set PATH inside the script and call the `claude` binary, not a shell function.
 
 ### 14. Optional: a hint hook
@@ -353,7 +382,7 @@ Build it only if step 12 shows recall dropping. On our setup, name-only skills w
 | Token medians differ between rounds | Run directory changed | Compare only arms within one round |
 | `Agent type 'lean' not found` | Agents load at session start | New session |
 | Audit hides a skill CLAUDE.md points to | Typed-only rule fires on a pointer target | Keep explicit name-only decisions |
-| Baseline creeps back up | New skills default to fully listed | Name-only probation plus monthly audit |
+| Baseline creeps back up | New skills default to fully listed | Name-only probation plus monthly audit. Pin sizes with `audit/size-ratchet.py` (step 13); it fails when any tracked file or skill listing grows |
 | Scheduled audit can't find `claude` | launchd/cron skip your shell profile | Set PATH in the script |
 | `zsh: no matches found` | Unquoted `--include=*.jsonl` got globbed | Quote it |
 
@@ -372,9 +401,11 @@ Build it only if step 12 shows recall dropping. On our setup, name-only skills w
 - [ ] Rename opaque name-only skills to trigger-shaped names; A/B with `ab/make_rename_arms.py`.
 - [ ] Export `CLAUDE_CODE_DISABLE_ARTIFACT=1` in your shell rc (not the settings key); publish via `tools/publish-artifact.sh`.
 - [ ] Probe other heavy built-in tools with `measure/probe-interactive.sh --disallowedTools X`.
-- [ ] Move procedures out of CLAUDE.md into skills; leave one-line pointers.
-- [ ] Deny or remove MCP servers with zero calls.
+- [ ] Move procedures out of CLAUDE.md into skills; leave one-line pointers. Run `audit/memory-lint.py` and fix any ML001.
+- [ ] Deny or remove MCP servers with zero calls (`audit/mcp-usage.py --all-projects`).
 - [ ] A/B new settings against old on real prompts (`ab/`); adopt only if recall holds and wrong picks don't rise.
+- [ ] Build the A/B control arm (`ab/make_rename_arms.py --control`); the report must say `harness can detect loss: yes`.
+- [ ] Pin sizes: `audit/size-ratchet.py --baseline FILE` (first run writes it), then run it from a hook or CI.
 - [ ] Open a few fresh sessions and record the new real baseline.
 - [ ] New skills start name-only; schedule the monthly audit.
 
