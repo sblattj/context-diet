@@ -7,6 +7,11 @@ Metrics (run level, excluded/errored runs dropped):
   wrong skill       positives where skills fired but none was expected
   fires on negatives
   median start tokens (first assistant turn input+cache usage)
+Savings: per case, the median start tokens over its usable reps, per arm; each non-baseline
+arm is paired with the baseline on cases where both have a value. Ratio = arm/baseline per
+case; reported as the geometric-mean ratio (percent change) with a 95% percentile bootstrap
+CI (resampling cases, 2000 resamples, --seed) and an exact two-sided sign test on
+cheaper vs costlier cases (ties excluded from the test, counted in the case total).
 Paired test: per-case majority outcome across reps (hit iff > half the reps hit),
 each non-baseline arm vs the baseline (first arm in run order, or --baseline),
 over positive cases present in both arms. McNemar is the exact two-sided
@@ -15,6 +20,7 @@ binomial test on discordant pairs. Also lists per-skill regressions.
 import argparse
 import json
 import math
+import random
 import statistics
 import sys
 from collections import defaultdict
@@ -43,6 +49,50 @@ def mcnemar_exact(b, c):
     k = min(b, c)
     tail = sum(math.comb(n, i) for i in range(k + 1)) / 2 ** n
     return min(1.0, 2 * tail)
+
+
+def sign_test_exact(k, n):
+    """Exact two-sided binomial (p = 0.5) sign-test p for k of n; n == 0 gives 1.0."""
+    return mcnemar_exact(k, n - k)
+
+
+BOOT_RESAMPLES = 2000
+
+
+def geo_mean(ratios):
+    return math.exp(math.fsum(math.log(x) for x in ratios) / len(ratios))
+
+
+def case_medians(recs):
+    """case id -> median start tokens over that case's usable reps with a token value."""
+    by = defaultdict(list)
+    for r in recs:
+        if r.get("start_tokens"):
+            by[r["case"]].append(r["start_tokens"])
+    return {c: statistics.median(v) for c, v in by.items()}
+
+
+def savings(base_med, arm_med, seed=0, resamples=BOOT_RESAMPLES):
+    """Paired token savings of an arm vs the baseline from per-case medians.
+
+    Returns dict(cases, geo_ratio, pct, ci (pct lo, hi), cheaper, costlier, p), or None
+    if fewer than 2 paired cases.
+    """
+    common = sorted(set(base_med) & set(arm_med))
+    if len(common) < 2:
+        return None
+    ratios = [arm_med[c] / base_med[c] for c in common]
+    gm = geo_mean(ratios)
+    rng = random.Random(seed)
+    n = len(ratios)
+    boots = sorted(geo_mean([ratios[rng.randrange(n)] for _ in range(n)]) for _ in range(resamples))
+    lo = min(boots[int(0.025 * resamples)], gm)  # clamp only matters for float noise on constant ratios
+    hi = max(boots[int(0.975 * resamples) - 1], gm)
+    cheaper = sum(1 for x in ratios if x < 1)
+    costlier = sum(1 for x in ratios if x > 1)
+    return {"cases": n, "geo_ratio": gm, "pct": 100 * (gm - 1),
+            "ci": [100 * (lo - 1), 100 * (hi - 1)], "cheaper": cheaper, "costlier": costlier,
+            "p": sign_test_exact(cheaper, cheaper + costlier)}
 
 
 def is_hit(rec):
@@ -99,7 +149,39 @@ def skill_rates(recs):
     return by
 
 
-def build_report(recs, baseline=None, synthetic="exclude"):
+def control_arms(recs, extra=()):
+    """Arm names marked as negative controls: any record with control=true, plus --control names."""
+    return sorted({r["arm"] for r in recs if r.get("control")} | set(extra))
+
+
+def add_control_info(out, controls):
+    """Label control arms and attach the calibration (can the harness detect a recall loss?)."""
+    out["controls"] = [c for c in controls if c in out["arms"]]
+    out["calibration"] = {}
+    for c in out["controls"]:
+        out["arms"][c]["control"] = True
+        pr = out["paired"].get(c)
+        if pr is None:
+            continue
+        pr["control"] = True
+        bk, bn = out["arms"][out["baseline"]]["recall"]
+        ck, cn = out["arms"][c]["recall"]
+        lower = bn > 0 and cn > 0 and ck / cn < bk / bn
+        out["calibration"][c] = {"recall": [ck, cn], "baseline_recall": [bk, bn],
+                                 "p": pr["p"], "detects_loss": bool(lower and pr["p"] < 0.05)}
+
+
+def render_calibration(rep):
+    L = []
+    for c, cal in (rep.get("calibration") or {}).items():
+        (ck, cn), (bk, bn) = cal["recall"], cal["baseline_recall"]
+        pct = lambda k, n: "n/a" if n == 0 else "%.0f%%" % (100 * k / n)  # noqa: E731
+        L.append("control %s: recall %s vs baseline %s (harness can detect loss: %s; McNemar p = %.4g)" % (
+            c, pct(ck, cn), pct(bk, bn), "yes" if cal["detects_loss"] else "no", cal["p"]))
+    return L
+
+
+def build_report(recs, baseline=None, synthetic="exclude", seed=0, controls=()):
     """synthetic: exclude (default; real recall is not inflated) | include | only."""
     synth_all = [r for r in recs if r.get("synthetic") and not r.get("excluded") and not r.get("error")]
     all_recs = recs  # arm list/order always comes from every record
@@ -116,7 +198,7 @@ def build_report(recs, baseline=None, synthetic="exclude"):
     arms = sorted(order, key=lambda x: order[x])
     base = baseline or (arms[0] if arms else None)
     per = {a: [r for r in usable if r["arm"] == a] for a in arms}
-    out = {"synthetic_mode": synthetic, "baseline": base, "arms": {}, "paired": {},
+    out = {"synthetic_mode": synthetic, "baseline": base, "arms": {}, "paired": {}, "savings": {},
            "errors": sum(1 for r in recs if r.get("error")),
            "excluded": sum(1 for r in recs if r.get("excluded"))}
     for a in arms:
@@ -140,6 +222,9 @@ def build_report(recs, baseline=None, synthetic="exclude"):
                             "only_arm": len(only_arm),
                             "p": mcnemar_exact(len(only_base), len(only_arm)),
                             "regressions": regress}
+        bmed, amed = case_medians(per[base]), case_medians(per[a])
+        out["savings"][a] = {"paired_cases": len(set(bmed) & set(amed)), **(savings(bmed, amed, seed) or {})}
+    add_control_info(out, control_arms(all_recs, controls))
     return out
 
 
@@ -152,6 +237,8 @@ def render(rep):
     L.append("%-14s %-24s %-24s %-22s %-22s %s" % ("arm", "recall", "recall (implicit)", "wrong skill",
                                                      "fires on negatives", "median start tok"))
     for a, s in rep["arms"].items():
+        if s.get("control"):
+            a = a + " [control]"
         mt = "%.0f" % s["median_tokens"] if s["median_tokens"] is not None else "n/a"
         L.append("%-14s %-24s %-24s %-22s %-22s %s" % (
             a, fmt(*s["recall"]), fmt(*s["recall_implicit"]), fmt(*s["wrong"]), fmt(*s["neg_fire"]), mt))
@@ -159,11 +246,25 @@ def render(rep):
             L.append("%-14s synthetic-only recall (not in the numbers above): %s" % ("", fmt(*s["synthetic_recall"])))
     for a, p in rep["paired"].items():
         L.append("")
+        if p.get("control"):
+            a = a + " [control]"
         L.append("Paired %s vs %s over %d positive cases (per-case majority): only %s hit: %d, only %s hit: %d, "
                  "exact McNemar p = %.4g" % (a, rep["baseline"], p["cases"], rep["baseline"],
                                              p["only_baseline"], a, p["only_arm"], p["p"]))
-        for s, b, x in p["regressions"]:
+        for s, b, x in ([] if p.get("control") else p["regressions"]):
             L.append("  regression: %s  %d/%d -> %d/%d" % (s, b[0], b[1], x[0], x[1]))
+    for a, v in rep.get("savings", {}).items():
+        if "pct" not in v:
+            L.append("%s start tokens vs %s: n/a (%d paired cases)" % (a, rep["baseline"], v["paired_cases"]))
+        else:
+            L.append("%s start tokens vs %s: %+.1f%% [%.1f, %.1f] (geo-mean, 95%% bootstrap, %d cases); "
+                     "cheaper on %d/%d, sign p = %.2g" % (
+                         a, rep["baseline"], v["pct"], v["ci"][0], v["ci"][1], v["cases"],
+                         v["cheaper"], v["cases"], v["p"]))
+    cal = render_calibration(rep)
+    if cal:
+        L.append("")
+        L.extend(cal)
     return "\n".join(L)
 
 
@@ -173,9 +274,12 @@ def main(argv=None):
     ap.add_argument("--baseline", default=None, help="baseline arm name (default: first arm in run order)")
     ap.add_argument("--synthetic", choices=["exclude", "include", "only"], default="exclude",
                     help="treatment of synthetic cases (default exclude; their recall is shown on its own line)")
+    ap.add_argument("--seed", type=int, default=0, help="bootstrap seed for the token-savings CI (default 0)")
+    ap.add_argument("--control", action="append", default=[], metavar="ARM",
+                    help="also treat ARM as a negative control (normally read from the records; repeatable)")
     ap.add_argument("--json", action="store_true", help="emit JSON instead of text")
     a = ap.parse_args(argv)
-    rep = build_report(load(a.results), a.baseline, a.synthetic)
+    rep = build_report(load(a.results), a.baseline, a.synthetic, seed=a.seed, controls=a.control)
     print(json.dumps(rep, indent=2) if a.json else render(rep))
     return 0
 
