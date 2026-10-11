@@ -9,7 +9,7 @@ S-T: every session pays a fixed "entry fee" of tokens before you type anything. 
 | Folder | What it does |
 |---|---|
 | `measure/` | `start_tokens.py` (real start per session from your logs, split by block), `probe-interactive.sh` (cost of one built-in tool in a real interactive session), `ablate.sh` (headless component ablation) |
-| `audit/` | `skill-usage.py` (how often each skill really fired), `audit.py` (suggested `skillOverrides`), `skill-lint.py` (600-char description cap) |
+| `audit/` | `skill-usage.py` (how often each skill really fired), `audit.py` (suggested `skillOverrides`), `skill-lint.py` (600-char description cap), `mcp-usage.py` (calls per MCP server, suggests `deniedMcpServers`), `size-ratchet.py` (fails when CLAUDE.md, agents or a skill listing grow past a pinned baseline), `memory-lint.py` (lint CLAUDE.md and its `@` imports for dangling pointers, import cycles and duplicated rules) |
 | `ab/` | Skill-trigger A/B: mine prompts from logs, build arms, synthesize missing positives, run, report recall / wrong pick / false fires / McNemar. Rename arms included |
 | `tools/` | `publish-artifact.sh`: publish an Artifact page from a throwaway side session so the Artifact tool can stay off |
 | `agents/lean.md` | A low-context subagent (shell + file tools only) for fan-out work |
@@ -31,9 +31,12 @@ Or just clone and run the scripts. Python 3.9+, no dependencies; `tmux` for the 
 python3 measure/start_tokens.py                    # what do my last 5 sessions in this project start at?
 python3 audit/skill-usage.py --all-projects -o /tmp/usage.csv
 python3 audit/audit.py /tmp/usage.csv --hide       # what to hide or list by name only (A/B before keeping)
+python3 audit/mcp-usage.py --all-projects          # which MCP servers to deny
+python3 audit/size-ratchet.py --baseline ~/context-diet-baseline.json   # pin sizes; exit 1 when they grow
+python3 audit/memory-lint.py                       # dangling @imports and paths in CLAUDE.md
 ```
 
-Scope and config: scripts read `$CLAUDE_CONFIG_DIR` if set, else `~/.claude`. Session readers (`start_tokens.py`, `skill-usage.py`, `ab/mine.py`) default to the current directory's project; use `--project PATH` for another one or `--all-projects` for all. If the project has no sessions they exit 2 rather than reading everything. Anything that calls a model (`ablate.sh`, `ab/filter.py`, `ab/synth.py`, `ab/run.py`, `ab/quick_ab.py`) requires `--model` with an explicit model id.
+Scope and config: scripts read `$CLAUDE_CONFIG_DIR` if set, else `~/.claude`. Session readers (`start_tokens.py`, `skill-usage.py`, `mcp-usage.py`, `ab/mine.py`) default to the current directory's project; use `--project PATH` for another one or `--all-projects` for all. If the project has no sessions they exit 2 rather than reading everything. Anything that calls a model (`ablate.sh`, `ab/filter.py`, `ab/synth.py`, `ab/run.py`, `ab/quick_ab.py`) requires `--model` with an explicit model id.
 
 Then follow `docs/RUNBOOK.md`: change one lever, A/B it (`ab/README.md`), keep it only if recall holds.
 

@@ -33,12 +33,20 @@ python3 filter.py work/candidates.jsonl --out work/cases.jsonl --model MODEL_ID
 ```
 Mined negatives are noisy (some no-skill turns *should* have used a skill): relabel by hand before trusting the negative fire rate.
 
+**Selftest.** Before judging anything, `filter.py` runs the judge on 12 committed, clear-cut prompts (`ab/fixtures/selftest/filter.jsonl`: 6 self-contained requests it must keep, 6 replies or noise it must drop). It aborts with `ABORT: judge selftest failed ...` (exit 1) if agreement with the labels is below `--selftest-min` (default 10 of 12). Every disagreement is printed. This catches judge drift, which would otherwise silently bias which prompts reach the recall arms. `--selftest` runs only the check (exit 0 pass, 1 fail); `--no-selftest` skips it. The selftest costs 1 model call, reported in the final summary line (`N selftest calls`).
+
+```sh
+python3 filter.py --selftest --model MODEL_ID
+```
+
 ```sh
 # 2b. Synthetic positives for skills with no (or too few) mined positives (the issue added 14)
 python3 synth.py work/cases.jsonl --skills-dir "$HOME/.claude/skills" --arms work/arms/*.json \
     --min-positives 1 --per-skill 2 --model MODEL_ID
 ```
 Appends `"synthetic": true` positives (same schema, `explicit: false`) to `cases.jsonl`, generated from each skill's name and description through the same `claude -p` path as `filter.py` (your `--model`, deadline, key stripped). Prompts that name the skill, duplicates of existing cases, and skills hidden from the model (`user-invocable-only`/`off` in any `--arms` file, or `disable-model-invocation: true`) are skipped. `--min-positives` defaults to 1 and `--per-skill` to 2. `--dry-run` lists what would be generated. Run it after `make_arms.py` so `--arms` exists, and re-run `run.py` afterwards (it only runs the new cases). `report.py` excludes synthetic cases by default (`--synthetic include|only` to change) and prints their recall on a separate line, so real recall is not inflated.
+
+**Selftest.** `synth.py` first generates 3 prompts for a synthetic fixture skill (`ab/fixtures/selftest/synth.json`). It aborts (exit 1) unless the reply parses, has exactly 3 non-empty prompts, and none contains the skill's literal name. One PASS/FAIL line per check. `python3 synth.py --selftest --model MODEL_ID` runs only the check; `--no-selftest` skips it (`--dry-run` makes no calls, so it never runs it). The call count appears in the summary line.
 
 ```sh
 # 3. Arms: complete skillOverrides maps; each arm pins every skill explicitly. First --arm = baseline.
@@ -59,6 +67,12 @@ Each run is `claude -p <prompt> --model <id> --settings <arm>.json --tools Skill
 python3 report.py work/results.jsonl
 ```
 Per arm: recall (all / implicit), wrong-skill rate, fire rate on negatives, median start tokens, each with a Wilson 95% CI. For every non-baseline arm: an exact two-sided McNemar test (binomial on discordant pairs) over per-case majority outcomes across reps, plus per-skill regressions. `--json` for machine output, `--baseline NAME` to change the baseline.
+
+**Token savings.** For each case, `report.py` takes the median start tokens over that case's usable reps, per arm, and pairs each non-baseline arm with the baseline on cases where both have a value. The per-case ratio is arm/baseline. The report shows the geometric-mean ratio as a percent change, a 95% percentile bootstrap interval (cases resampled with replacement, 2000 resamples, seeded by `--seed`, default 0), and an exact two-sided sign test on cheaper vs costlier cases (ties excluded):
+
+    slim start tokens vs base: -25.9% [-30.9, -16.0] (geo-mean, 95% bootstrap, 8 cases); cheaper on 7/8, sign p = 0.07
+
+With fewer than 2 paired cases the line reads `n/a (k paired cases)`. The same numbers are under `savings.<arm>` in `--json` output.
 
 ## Quick version
 
@@ -90,3 +104,17 @@ python3 run.py --arms arms/before.json arms/renamed.json --cases work/cases.json
 ```
 
 Write the test prompts from the SKILL.md with a writer that never sees the new names, or the arm wins by construction. Measured once (7 opaque names, 35 fresh prompts x 3 reps): recall 49% -> 90%, McNemar p < 0.0001, other skills flat. A `use-this-skill-when-` prefix (`--prefix`) gained nothing over the same names and cost ~300 start tokens.
+
+## Negative control arm
+
+A round where nothing regresses might only mean the prompts were easy. A control arm proves the harness can see a loss. Setting skills to `off` does not work: those positives are excluded by design, so no calls are made. Instead every skill stays callable but loses its signal. It is renamed to an opaque `skill-NN` and set to `name-only`.
+
+```sh
+python3 make_rename_arms.py --skills-dir ~/.claude/skills --base arms/before.json --control --out arms
+```
+
+This writes `arms/control.json`, `arms/control.meta.json` (`"control": true`) and the renamed copies. `--name` changes the arm name. `run.py` runs it like any arm, maps fired names back, and stamps `control: true` on its records. `report.py` labels it `[control]`, skips the regression list for it, and prints a calibration line:
+
+    control control: recall 0% vs baseline 100% (harness can detect loss: yes; McNemar p = 0.03125)
+
+`yes` means control recall is below baseline and McNemar p < 0.05. `no` means the prompts or model find skills without the name, so "no loss" results in that round are weak evidence. `--json` adds `controls`, `calibration`, and `control: true` on the arm and paired entries. `report.py --control ARM` marks an arm as control for results recorded without the flag.
