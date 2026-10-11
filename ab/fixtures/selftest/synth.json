@@ -1,0 +1,5 @@
+{
+  "name": "ledger-reconcile",
+  "description": "Use when the user wants to reconcile bank statement lines against ledger entries, find unmatched transactions, or explain a balance discrepancy in accounting data.",
+  "n": 3
+}
