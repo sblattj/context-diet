@@ -15,6 +15,8 @@ excluded by design (recorded with excluded=true, no call made).
 Rename arms (make_rename_arms.py) add ARM.meta.json next to ARM.json:
 {"cwd": dir whose .claude/skills holds renamed copies, "rename": {new: old}}.
 Runs use that cwd, and fired names are mapped back to the original names.
+"control": true in the meta (make_rename_arms.py --control) marks a negative-control
+arm; its records carry control=true so report.py can label it.
 
 Billing: strips ANTHROPIC_API_KEY from the child env so the subscription is used
 (--keep-api-key to disable). Each call has a wall-clock --deadline.
@@ -133,6 +135,8 @@ def run_one(case, arm, arm_path, rep, opts, arm_idx=0):
         return rec
     t0 = time.time()
     meta = load_meta(arm_path)
+    if meta.get("control"):
+        rec["control"] = True
     try:
         out, _rc = _claude.run_claude(
             build_args(case["prompt"], arm_path, opts.model, opts.max_turns, opts.tools),
