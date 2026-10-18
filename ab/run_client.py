@@ -159,14 +159,14 @@ class CodexAdapter:
     """codex-cli via CODEX_HOME=<arm root>. Runs go through ach (`ach run --agent codex`)."""
     name = "codex"
 
-    def __init__(self, live_home="~/.codex", codex_bin="/Users/sblatt/.local/bin/codex",
-                 bun_bin="/Users/sblatt/.bun/bin/bun",
-                 ach_ts="/Users/sblatt/.dotai/vendor/agentic-coding-harness/src/cli/ach.ts",
+    def __init__(self, live_home="~/.codex", codex_bin=None, bun_bin=None, ach_ts=None,
                  user_skill_roots=("~/.codex/skills", "~/.agents/skills")):
         self.live_home = os.path.expanduser(live_home)
-        self.codex_bin = codex_bin
-        self.bun_bin = bun_bin
-        self.ach_ts = ach_ts
+        self.codex_bin = codex_bin or shutil.which("codex") or "codex"
+        self.bun_bin = bun_bin or shutil.which("bun") or os.path.expanduser("~/.bun/bin/bun")
+        # ach.ts: --ach-ts, else $ACH_TS, else the dotai vendor checkout.
+        self.ach_ts = os.path.expanduser(ach_ts or os.environ.get("ACH_TS") or
+                                         "~/.dotai/vendor/agentic-coding-harness/src/cli/ach.ts")
         self.user_skill_roots = [os.path.expanduser(r) for r in user_skill_roots]
 
     def discover(self):
@@ -521,9 +521,9 @@ def main(argv=None):
     ap.add_argument("--progress")
     ap.add_argument("--keep-errors", action="store_true")
     ap.add_argument("--live-home", default=None, help="codex: live config root (default ~/.codex)")
-    ap.add_argument("--codex-bin", default=None, help="codex: binary (default /Users/sblatt/.local/bin/codex)")
+    ap.add_argument("--codex-bin", default=None, help="codex: binary (default: codex on PATH)")
     ap.add_argument("--bun-bin", default=None, help="bun binary that runs ach.ts")
-    ap.add_argument("--ach-ts", default=None, help="path to ach.ts (agentic-coding-harness src/cli/ach.ts)")
+    ap.add_argument("--ach-ts", default=None, help="path to ach.ts (default $ACH_TS, else ~/.dotai/vendor/agentic-coding-harness/src/cli/ach.ts)")
     ap.add_argument("--skill-roots", nargs="+", default=None,
                     help="codex: user skill roots codex scans (default ~/.codex/skills ~/.agents/skills)")
     a = ap.parse_args(argv)
