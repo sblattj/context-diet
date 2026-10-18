@@ -1,7 +1,7 @@
 {
   "name": "context-diet",
   "displayName": "Context Diet",
-  "version": "0.1.0",
+  "version": "0.2.0",
   "description": "Measure and cut what Claude Code loads before your first prompt (skills listing, tools, CLAUDE.md, MCP) without breaking which skills fire.",
   "author": { "name": "sblattj" },
   "homepage": "https://github.com/sblattj/context-diet",
