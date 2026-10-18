@@ -195,7 +195,7 @@ class UnitTests(unittest.TestCase):
     def test_detect_reads_real_shapes(self):
         texts = ["/bin/zsh -lc 'cat /tmp/arms/store/explain-branch/SKILL.md'",
                  'const r = await tools.exec_command({cmd:"cat /a/listed/skills/readback/SKILL.md",max_output_tokens:1});',
-                 "sed -n '1,80p' /Users/x/.codex/skills/safe-git-sync/SKILL.md",
+                 "sed -n '1,80p' /home/u/.codex/skills/safe-git-sync/SKILL.md",
                  "ls /store/*/SKILL.md", "cat /store/<name>/SKILL.md", "cat notes.md",
                  "cat /tmp/arms/store/explain-branch/SKILL.md"]
         names, paths = rc.detect_reads(texts)
