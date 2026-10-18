@@ -1,6 +1,6 @@
 #!/usr/bin/env python3
 """Cross-client skill-recall A/B: does a one-line "name index" in the instructions
-file replace a native skills catalog? Clients: codex, agy (others plug in as adapters).
+file replace a native skills catalog? Clients: codex, agy, omp (others plug in as adapters).
 
 Three arms per client (built from Claude's skillOverrides):
   listed  every skill in the client's native catalog (today's state)
