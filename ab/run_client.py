@@ -1,6 +1,6 @@
 #!/usr/bin/env python3
 """Cross-client skill-recall A/B: does a one-line "name index" in the instructions
-file replace a native skills catalog? First client: codex (others plug in as adapters).
+file replace a native skills catalog? Clients: codex, agy (others plug in as adapters).
 
 Three arms per client (built from Claude's skillOverrides):
   listed  every skill in the client's native catalog (today's state)
@@ -22,7 +22,7 @@ Records match run.py's (arm, case, rep, label, expected, skills, start_tokens, e
 error, ...), so report.py reads them unchanged. A positive is excluded (no call) when
 none of its expected skills has a SKILL.md in the store (e.g. a dangling link).
 
-Adapter contract (add agy/omp/... to ADAPTERS):
+Adapter contract (add omp/... to ADAPTERS; codex and agy exist):
   adapter.discover()                      -> {name: skill dir} of the live native catalog
   adapter.build_arm(arm, root, plan)      -> writes one arm's isolated config root
   adapter.check_arm(root, cwd)            -> {"catalog": [names], "index_present": bool, "chars": int}
@@ -31,6 +31,7 @@ Adapter contract (add agy/omp/... to ADAPTERS):
 """
 import argparse
 import concurrent.futures as cf
+import inspect
 import json
 import os
 import re
@@ -366,7 +367,268 @@ class CodexAdapter:
         return res
 
 
-ADAPTERS = {"codex": CodexAdapter}
+# ---------------------------------------------------------------------------
+# agy (Google Antigravity CLI) adapter
+
+def frontmatter_disabled(skill_md):
+    """True when SKILL.md front matter sets disable-model-invocation: true."""
+    try:
+        with open(skill_md, encoding="utf-8") as fh:
+            text = fh.read(8192)
+    except OSError:
+        return False
+    m = re.match(r"---\s*\n(.*?)\n---", text, re.S)
+    return bool(m and re.search(r"(?m)^disable-model-invocation:\s*true\s*$", m.group(1)))
+
+
+class AgyAdapter:
+    """Google Antigravity CLI (`agy`) via HOME=<arm root>. Every config and skill root agy
+    reads is HOME-relative (~/.gemini/config/{GEMINI.md,skills}, ~/.agents/skills,
+    ~/.gemini/antigravity-cli app data), so a swapped HOME isolates the whole catalog.
+    Auth lives in the macOS login keychain; `security` resolves it through
+    $HOME/Library/Keychains, which the arm symlinks (no credential is copied).
+    Runs call agy directly (`agy -p ... --output-format json`) with a wall-clock deadline."""
+    name = "agy"
+    INSTR = "GEMINI.md"
+
+    def __init__(self, live_home="~/.gemini", agy_bin=None,
+                 user_skill_roots=("~/.gemini/config/skills", "~/.agents/skills"),
+                 keychains="~/Library/Keychains"):
+        self.live_home = os.path.expanduser(live_home)
+        self.agy_bin = agy_bin or shutil.which("agy") or os.path.expanduser("~/.local/bin/agy")
+        self.user_skill_roots = [os.path.expanduser(r) for r in user_skill_roots]
+        self.keychains = os.path.expanduser(keychains)
+
+    @staticmethod
+    def model_invocable(skill_dir):
+        """agy's rule: listed unless front matter sets disable-model-invocation: true."""
+        md = os.path.join(skill_dir, "SKILL.md")
+        return os.path.isfile(md) and not frontmatter_disabled(md)
+
+    def discover(self):
+        cat = {}
+        for root in self.user_skill_roots:
+            if not os.path.isdir(root):
+                continue
+            for n in sorted(os.listdir(root)):
+                if not n.startswith("."):
+                    cat.setdefault(n, os.path.join(root, n))
+        return cat
+
+    def instructions_text(self):
+        p = os.path.join(self.live_home, "config", self.INSTR)
+        if os.path.isfile(p):
+            with open(p, encoding="utf-8") as fh:
+                return fh.read()
+        return ""
+
+    def live_model(self):
+        try:
+            with open(os.path.join(self.live_home, "antigravity-cli", "settings.json"), encoding="utf-8") as fh:
+                return json.load(fh).get("model")
+        except (OSError, ValueError):
+            return None
+
+    @staticmethod
+    def _relink(path, target):
+        if os.path.lexists(path):
+            os.unlink(path)
+        os.symlink(target, path)
+
+    def build_arm(self, arm, root, plan, catalog):
+        """Arm HOME: Library/Keychains symlink, .gemini/antigravity-cli/settings.json with only
+        the live model, .gemini/config/GEMINI.md (+ AGENTS.md -> GEMINI.md, as live), and
+        .gemini/config/skills/<name> symlinks. No MCP config, no hooks, no ~/.agents.
+        agy installs its own builtin skills under antigravity-cli/builtin (like codex .system)."""
+        root = os.path.abspath(root)
+        os.makedirs(os.path.join(root, "Library"), exist_ok=True)
+        self._relink(os.path.join(root, "Library", "Keychains"), self.keychains)
+        app = os.path.join(root, ".gemini", "antigravity-cli")
+        cfg = os.path.join(root, ".gemini", "config")
+        skills = os.path.join(cfg, "skills")
+        os.makedirs(app, exist_ok=True)
+        if os.path.islink(skills):
+            os.unlink(skills)
+        os.makedirs(skills, exist_ok=True)
+        for n in os.listdir(skills):
+            p = os.path.join(skills, n)
+            if os.path.islink(p):
+                os.unlink(p)
+        for n in plan["visible"]:
+            os.symlink(os.path.realpath(catalog[n]), os.path.join(skills, n))
+        stray = os.path.join(root, ".agents")
+        if os.path.lexists(stray):  # agy also scans ~/.agents/skills; the arm keeps one root
+            shutil.rmtree(stray) if os.path.isdir(stray) and not os.path.islink(stray) else os.unlink(stray)
+        for fn in ("mcp_config.json", "hooks.json"):
+            if os.path.lexists(os.path.join(cfg, fn)):
+                os.unlink(os.path.join(cfg, fn))
+        # Reads anywhere are allowed (like codex's read-only sandbox); every other tool keeps
+        # agy's default request-review, which headless print mode auto-denies.
+        settings = {"permissions": {"allow": ["read_file(*)"]}}
+        if self.live_model():
+            settings["model"] = self.live_model()
+        with open(os.path.join(app, "settings.json"), "w", encoding="utf-8") as fh:
+            json.dump(settings, fh)
+        text = self.instructions_text()
+        if plan["index"]:
+            text = text.rstrip("\n") + "\n\n" + plan["index"] + "\n"
+        gm = os.path.join(cfg, self.INSTR)
+        if os.path.lexists(gm):
+            os.unlink(gm)
+        with open(gm, "w", encoding="utf-8") as fh:
+            fh.write(text)
+        self._relink(os.path.join(cfg, "AGENTS.md"), self.INSTR)
+
+    def skill_roots_in(self, root):
+        return [os.path.join(root, ".gemini", "config", "skills"), os.path.join(root, ".agents", "skills")]
+
+    def check_arm(self, root, cwd):
+        """Free (no model call) check of what agy will scan under HOME=root: user skill roots
+        filtered by the front-matter rule, builtin skills, and the instruction files (by
+        realpath, as agy dedupes symlinks). The model-side proof is `prompt_catalog` on a
+        real run's conversation db (see run())."""
+        user, chars = [], 0
+        for r in self.skill_roots_in(root):
+            if not os.path.isdir(r):
+                continue
+            for n in sorted(os.listdir(r)):
+                d = os.path.join(r, n)
+                if not n.startswith(".") and n not in user and self.model_invocable(d):
+                    user.append(n)
+        bi = os.path.join(root, ".gemini", "antigravity-cli", "builtin", "skills")
+        system = sorted(n for n in os.listdir(bi) if not n.startswith(".")) if os.path.isdir(bi) else []
+        seen, idx, present = set(), 0, False
+        cfg = os.path.join(root, ".gemini", "config")
+        for fn in (self.INSTR, "AGENTS.md"):
+            p = os.path.join(cfg, fn)
+            if not os.path.isfile(p) or os.path.realpath(p) in seen:
+                continue
+            seen.add(os.path.realpath(p))
+            with open(p, encoding="utf-8") as fh:
+                t = fh.read()
+            present = present or bool(t.strip())
+            idx += t.count(INDEX_HEAD)
+            chars += len(t)
+        return {"catalog": sorted(user), "system": system, "index_present": idx == 1,
+                "agents_present": present, "chars": chars}
+
+    # -- runs ---------------------------------------------------------------
+
+    def args(self, prompt, opts):
+        a = [self.agy_bin, "-p", prompt, "--output-format", "stream-json",
+             "--print-timeout", "%ds" % int(opts.deadline)]
+        if getattr(opts, "model", None):
+            a += ["--model", opts.model]
+        return a
+
+    @staticmethod
+    def parse_stream(stdout):
+        """`--output-format stream-json` stdout -> (conversation_id, first-request input tokens,
+        [tool call inputs], result dict). Each model request is a step_update with
+        step_type agent_response and its own `usage`; the final result's usage is the whole-turn
+        SUM (verified: 28287 + 2056 = 30343 on a two-request run), so it is never start tokens.
+        Tool calls are step_update step_type tool with tool_info.parameters (e.g. view_file
+        {"AbsolutePath": ".../<name>/SKILL.md"}); tool OUTPUTS are not scanned."""
+        conv, first, texts, result, seen = None, None, [], {}, set()
+        for line in stdout.splitlines():
+            try:
+                ev = json.loads(line)
+            except ValueError:
+                continue
+            if not isinstance(ev, dict):
+                continue
+            if ev.get("event") == "init":
+                conv = conv or ev.get("conversation_id")
+            elif ev.get("event") == "result":
+                result = ev.get("result") or {}
+                conv = conv or result.get("conversation_id")
+            elif ev.get("event") == "step_update":
+                su = ev.get("step_update") or {}
+                conv = conv or su.get("conversation_id")
+                if su.get("step_type") == "agent_response" and su.get("usage") and first is None:
+                    u = su["usage"]
+                    first = (u.get("input_tokens") or 0) + (u.get("cache_read_tokens") or 0)
+                elif su.get("step_type") == "tool":
+                    params = (su.get("tool_info") or {}).get("parameters")
+                    key = (su.get("step_index"), json.dumps(params, sort_keys=True))
+                    if params is not None and key not in seen:
+                        seen.add(key)
+                        texts.append(params if isinstance(params, str) else json.dumps(params))
+        return conv, first, texts, result
+
+    @staticmethod
+    def find_db(root, conv_id):
+        p = os.path.join(root, ".gemini", "antigravity-cli", "conversations", "%s.db" % conv_id)
+        return p if conv_id and os.path.isfile(p) else None
+
+    @staticmethod
+    def prompt_catalog(text):
+        """Rendered request text -> {"catalog": user skill names, "system": builtin names,
+        "paths": {name: SKILL.md path}}. agy lists each skill as
+        `- <name> (<dir>/SKILL.md): <description>` inside <skills>...</skills>; builtins live
+        under antigravity-cli/builtin/skills."""
+        i = text.find("<skills>")
+        j = text.find("</skills>", i)
+        sk = text[i:j] if i != -1 else ""
+        paths = dict(re.findall(r"(?m)^- ([A-Za-z0-9][A-Za-z0-9._:-]*) \(([^()\n]*/SKILL\.md)\):", sk))
+        system = sorted(n for n, p in paths.items() if "/antigravity-cli/builtin/" in p)
+        return {"catalog": sorted(set(paths) - set(system)), "system": system, "paths": paths}
+
+    def request_catalog(self, root, conv_id):
+        """The catalog the model actually received: the first gen_metadata row of the run's
+        conversation db that holds a rendered <skills> block (rows are per generation and not
+        all carry the prompt; observed a 1.2KB row 0 before the 185KB prompt row). None when
+        the db or such a row is missing."""
+        import sqlite3
+        p = self.find_db(root, conv_id)
+        if not p:
+            return None
+        db = sqlite3.connect("file:%s?mode=ro" % p, uri=True)
+        try:
+            for (data,) in db.execute("select data from gen_metadata order by idx"):
+                text = bytes(data).decode("utf-8", "replace")
+                if "<skills>" in text:
+                    return self.prompt_catalog(text)
+        finally:
+            db.close()
+        return None
+
+    def run(self, prompt, root, cwd, opts):
+        res = {"read_skills": [], "native_skills": [], "start_tokens": None, "error": None,
+               "session_id": None, "read_paths": []}
+        root = os.path.abspath(root)
+        try:
+            env = dict(os.environ, HOME=root)
+            try:
+                p = subprocess.run(self.args(prompt, opts), cwd=cwd, env=env, stdin=subprocess.DEVNULL,
+                                   capture_output=True, timeout=opts.deadline + 30)
+                out, rc = p.stdout.decode("utf-8", "replace"), p.returncode
+                err = p.stderr.decode("utf-8", "replace")
+            except subprocess.TimeoutExpired as e:
+                out = (e.stdout or b"").decode("utf-8", "replace")
+                rc, err = None, "wall-clock deadline %ss" % (opts.deadline + 30)
+            with open(os.path.join(cwd, ".agy-stream.jsonl"), "w", encoding="utf-8") as fh:
+                fh.write(out)  # raw evidence; the run is over, the agent never sees it
+            conv, st, texts, result = self.parse_stream(out)
+            res["session_id"] = conv
+            res["read_skills"], res["read_paths"] = detect_reads(texts)
+            res["start_tokens"] = st
+            res["start_tokens_source"] = "stream-first-agent_response" if st is not None else None
+            res["exit_status"] = result.get("status")
+            if result.get("denied_actions"):
+                res["denied_actions"] = [d.get("action") for d in result["denied_actions"]]
+            if getattr(opts, "verify_prompt", False):
+                res["prompt_catalog"] = self.request_catalog(root, conv)
+            if result.get("status") != "SUCCESS" and not res["read_skills"]:
+                res["error"] = "agy status=%s rc=%s %s" % (result.get("status"), rc, err.strip()[-200:])
+            elif st is None:
+                res["error"] = "no agent_response usage in stream for conversation %s" % conv
+        except Exception as e:  # noqa: BLE001 - recorded
+            res["error"] = str(e)[:300]
+        return res
+
+
+ADAPTERS = {"codex": CodexAdapter, "agy": AgyAdapter}
 
 
 # ---------------------------------------------------------------------------
@@ -387,7 +649,8 @@ def cmd_build(a, ad):
     catalog = ad.discover()
     store = os.path.join(arms_root, "store")
     in_store = build_store(store, catalog)
-    visible = {n: d for n, d in catalog.items() if n in in_store and model_invocable(os.path.join(store, n))}
+    invocable = getattr(ad, "model_invocable", model_invocable)
+    visible = {n: d for n, d in catalog.items() if n in in_store and invocable(os.path.join(store, n))}
     plan = plan_arms(visible, name_only_skills(a.overrides), store)
     for arm in ARMS:
         ad.build_arm(arm, arm_root(arms_root, arm), plan[arm], catalog)
@@ -441,6 +704,9 @@ def run_case(ad, case, arm, arm_idx, rep, a, arms_root, store):
     rec.update(skills=skills, start_tokens=r["start_tokens"], session_id=r.get("session_id"),
                read_paths=r.get("read_paths", []), start_tokens_source=r.get("start_tokens_source"),
                exit_status=r.get("exit_status"))
+    for k in ("denied_actions", "prompt_catalog"):
+        if r.get(k) is not None:
+            rec[k] = r[k]
     if r["error"]:
         rec["error"] = r["error"]
     rec["secs"] = round(time.time() - t0, 1)
@@ -520,16 +786,24 @@ def main(argv=None):
     ap.add_argument("--skip-skill", nargs="*", default=[], help="drop cases expecting any of these skills")
     ap.add_argument("--progress")
     ap.add_argument("--keep-errors", action="store_true")
-    ap.add_argument("--live-home", default=None, help="codex: live config root (default ~/.codex)")
+    ap.add_argument("--verify-prompt", action="store_true",
+                    help="agy: record the catalog the model received (decoded from the conversation db)")
+    ap.add_argument("--live-home", default=None, help="live config root (codex ~/.codex, agy ~/.gemini)")
     ap.add_argument("--codex-bin", default=None, help="codex: binary (default: codex on PATH)")
+    ap.add_argument("--agy-bin", default=None, help="agy: binary (default: agy on PATH)")
+    ap.add_argument("--keychains", default=None, help="agy: keychain dir symlinked into each arm HOME (default ~/Library/Keychains)")
     ap.add_argument("--bun-bin", default=None, help="bun binary that runs ach.ts")
     ap.add_argument("--ach-ts", default=None, help="path to ach.ts (default $ACH_TS, else ~/.dotai/vendor/agentic-coding-harness/src/cli/ach.ts)")
     ap.add_argument("--skill-roots", nargs="+", default=None,
-                    help="codex: user skill roots codex scans (default ~/.codex/skills ~/.agents/skills)")
+                    help="user skill roots the client scans (codex: ~/.codex/skills ~/.agents/skills; "
+                         "agy: ~/.gemini/config/skills ~/.agents/skills)")
     a = ap.parse_args(argv)
     kw = {k: v for k, v in (("live_home", a.live_home), ("codex_bin", a.codex_bin), ("bun_bin", a.bun_bin),
-                             ("ach_ts", a.ach_ts), ("user_skill_roots", a.skill_roots)) if v}
-    ad = ADAPTERS[a.client](**kw)
+                             ("ach_ts", a.ach_ts), ("user_skill_roots", a.skill_roots), ("agy_bin", a.agy_bin),
+                             ("keychains", a.keychains)) if v}
+    cls = ADAPTERS[a.client]
+    accepted = inspect.signature(cls.__init__).parameters
+    ad = cls(**{k: v for k, v in kw.items() if k in accepted})
     if a.cmd == "probe":
         if not (a.arm and a.prompt):
             ap.error("probe needs --arm ARM --prompt TEXT")
