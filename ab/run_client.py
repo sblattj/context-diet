@@ -619,7 +619,11 @@ class AgyAdapter:
                 res["denied_actions"] = [d.get("action") for d in result["denied_actions"]]
             if getattr(opts, "verify_prompt", False):
                 res["prompt_catalog"] = self.request_catalog(root, conv)
-            if result.get("status") != "SUCCESS" and not res["read_skills"]:
+            if "read_file" in res.get("denied_actions", []):
+                # agy reports SUCCESS with an empty response when a read was auto-denied: a silent
+                # miss, so flag it (and redo it on resume) instead of counting it against recall.
+                res["error"] = "agy auto-denied read_file (missing permissions.allow in the arm settings?)"
+            elif result.get("status") != "SUCCESS" and not res["read_skills"]:
                 res["error"] = "agy status=%s rc=%s %s" % (result.get("status"), rc, err.strip()[-200:])
             elif st is None:
                 res["error"] = "no agent_response usage in stream for conversation %s" % conv

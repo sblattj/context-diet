@@ -135,8 +135,11 @@ if target:
                     "tool_info": {"name": "view_file", "parameters": {"AbsolutePath": target}}}})
 evs.append({"event": "step_update", "step_update": {"conversation_id": cid, "step_index": 4, "step_type": "agent_response",
             "state": "DONE", "usage": {"input_tokens": 50, "cache_read_tokens": toks}}})
-evs.append({"event": "result", "result": {"conversation_id": cid, "status": "SUCCESS", "response": "ok",
-            "usage": {"input_tokens": toks + 50, "cache_read_tokens": toks}}})
+res = {"conversation_id": cid, "status": "SUCCESS", "response": "ok",
+       "usage": {"input_tokens": toks + 50, "cache_read_tokens": toks}}
+if os.environ.get("FAKE_AGY_DENY_READ"):  # the observed shape of an auto-denied read
+    res.update(response="", denied_actions=[{"action": "read_file", "display_name": "ViewFile"}])
+evs.append({"event": "result", "result": res})
 for e in evs:
     print(json.dumps(e))
 '''
@@ -493,6 +496,17 @@ class AgyEndToEnd(unittest.TestCase):
         rep = report.build_report(report.load(res), synthetic="include")
         self.assertEqual(rep["arms"]["index"]["recall"], (2, 2))
         self.assertEqual(rep["arms"]["hidden"]["recall"], (0, 2))
+
+    def test_denied_read_is_an_error(self):
+        self.assertEqual(self.main("build")[0], 0)
+        os.environ["FAKE_AGY_DENY_READ"] = "1"
+        cases = os.path.join(self.tmp.name, "c.jsonl")
+        with open(cases, "w") as fh:
+            fh.write(json.dumps({"id": "p1", "label": "positive", "skills": ["deploy"], "prompt": "please deploy"}) + "\n")
+        res = os.path.join(self.tmp.name, "r.jsonl")
+        code, _o, _e = self.main("run", "--cases", cases, "--out", res, "--arm", "hidden")
+        self.assertEqual(code, 1)
+        self.assertIn("auto-denied read_file", json.loads(_read(res))["error"])
 
 
 if __name__ == "__main__":
