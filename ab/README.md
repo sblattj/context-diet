@@ -118,3 +118,29 @@ This writes `arms/control.json`, `arms/control.meta.json` (`"control": true`) an
     control control: recall 0% vs baseline 100% (harness can detect loss: yes; McNemar p = 0.03125)
 
 `yes` means control recall is below baseline and McNemar p < 0.05. `no` means the prompts or model find skills without the name, so "no loss" results in that round are weak evidence. `--json` adds `controls`, `calibration`, and `control: true` on the arm and paired entries. `report.py --control ARM` marks an arm as control for results recorded without the flag.
+
+## Other clients: does a name index replace the native skill list? (`run_client.py`)
+
+Question: if a CLI's native skill catalog drops most skills and its instructions file instead carries ONE "name index" paragraph, does the model still find and read the right skill? `run_client.py` builds three arms per client from Claude's `skillOverrides`:
+
+- `listed`: every model-invocable skill in the client's native catalog (today's state).
+- `index`: skills that are `name-only` in `skillOverrides` are removed from the catalog, and the instructions file gets one appended paragraph: `Other skills (not listed above). When one matches the task, read <store>/<name>/SKILL.md first: a, b, c.` `<store>` is `<arms-root>/store`, symlinks to every skill dir, outside the client's skill roots.
+- `hidden`: the same removal with no paragraph. This is the control: `index` has to beat `hidden` to mean anything.
+
+A run "fires" skill X when the agent's tool calls name a path ending in `/X/SKILL.md`. Only commands are scanned, never tool output, and globs are ignored. Start tokens are the input tokens of the first model request. A positive is excluded (recorded, no call) when none of its expected skills has a `SKILL.md` in the store, e.g. a dangling link. Records use `run.py`'s keys (`arm, case, rep, label, expected, skills, start_tokens, excluded, error`, ...), plus `client`, `session_id`, `read_paths`, `exit_status`. `report.py` reads them unchanged, and `listed` is the baseline.
+
+```sh
+R=/path/to/arms-codex
+python3 run_client.py build --client codex --arms-root $R          # build + free check, no model call
+python3 run_client.py probe --arms-root $R --arm listed --prompt "Read the SKILL.md of the skill named readback and summarize it."
+python3 run_client.py run --arms-root $R --cases work/cases.jsonl --out work/codex-results.jsonl --reps 2
+python3 report.py work/codex-results.jsonl --synthetic include
+```
+
+**codex adapter.** Each arm is its own `CODEX_HOME`. It holds a symlinked `auth.json` (credentials are never copied), the live `config.toml` with every `[mcp_servers...]` table removed, `AGENTS.md` (the live `AGENTS.override.md`, plus the paragraph in `index`), and `skills/` symlinks for the visible set. codex also scans `~/.agents/skills`, which sits outside `CODEX_HOME`, so hidden skills are also turned off with `[[skills.config]] name = "<n>" enabled = false`. codex leaves a skill out of its catalog when that skill's `agents/openai.yaml` sets `policy.allow_implicit_invocation: false`, and those skills stay out of every arm. Front-matter `disable-model-invocation` is ignored by codex. `build`/`check` render each arm with `codex debug prompt-input` (free) and print PASS/FAIL per arm: the catalog equals the plan, `AGENTS.md` is loaded, and the paragraph is present exactly once in `index` and absent elsewhere.
+
+Runs go through ach, so they show up in `ach dash`: `bun ach.ts run --agent codex --wall-ms <deadline> --extra-args=--skip-git-repo-check --sandbox read-only --json <prompt>`. Each run gets a fresh empty cwd under `<arms-root>/cwd/`. `CODEX_HOME` passes through ach to codex because ach scrubs env only when a sandbox policy flag such as `--permission-mode` is given, and none is. Reads are detected from ach's `tool_call` events and from the arm's codex rollout (`<arm>/sessions/.../rollout-*<sessionId>.jsonl`, `custom_tool_call` / `function_call` items). Start tokens come from the rollout's first `token_count.last_token_usage.input_tokens`. ach's `tokens[0].inputTokens` covers the whole codex turn (every request, minus cache reads), so it is never used. Keep `--workers` at 1 or 2, because runs in one arm share that arm's sqlite state.
+
+**Adding a client** (agy, omp, ...): write a class with `discover()`, `build_arm(arm, root, plan, catalog)`, `check_arm(root, cwd)` and `run(prompt, root, cwd, opts)` (returns `read_skills, native_skills, start_tokens, error, session_id, read_paths`), then register it in `ADAPTERS`. `native_skills` is for clients that have a real skill-invocation event.
+
+Tests: `ab/tests/test_run_client.py` (a fake `codex` and a fake ach-running `bun`; no network).
