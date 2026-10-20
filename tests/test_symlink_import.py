@@ -7,7 +7,8 @@ import unittest
 
 ROOT = os.path.dirname(os.path.dirname(os.path.realpath(__file__)))
 SCRIPTS = ["measure/start_tokens.py", "ab/mine.py", "audit/audit.py",
-           "audit/skill-usage.py", "audit/skill-lint.py", "audit/memory-lint.py"]
+           "audit/skill-usage.py", "audit/skill-lint.py", "audit/memory-lint.py",
+           "audit/handoff-lint.py"]
 
 
 class SymlinkImport(unittest.TestCase):
