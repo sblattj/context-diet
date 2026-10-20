@@ -18,13 +18,32 @@ Runs use that cwd, and fired names are mapped back to the original names.
 "control": true in the meta (make_rename_arms.py --control) marks a negative-control
 arm; its records carry control=true so report.py can label it.
 
+Per-arm CLI isolation: ARM.meta.json may also carry "claude_args" (extra `claude` args appended
+to the call, e.g. --setting-sources project,local --strict-mcp-config --mcp-config <json>; a
+--mcp-config / --strict-mcp-config given there replaces the default) and "env" (extra child
+environment variables, e.g. CLAUDE_CONFIG_DIR).
+
+Matching is exact on the full namespaced name ("a:b:c" matches only "a:b:c"; "context",
+"team:context" and "team:dev:context" are three different skills). A case may set
+"expected_any": [names] (any one is acceptable); "none" in the expected list means
+"no skill fired" is acceptable (negatives).
+
+Each record also has "listing" (listing_chars, listing_entries, name_only, with_description,
+parsed from the session transcript's skill_listing attachment; null if unavailable) and
+"fired_via": {name: "skill" | "read"}. "skills" lists Skill-tool fires first (the primary
+signal), then skills/commands whose SKILL.md / command .md was Read. Provider/API errors are
+kept as rows with error, is_error=true and error_class (rate_limit, overloaded, auth,
+timeout, no_output, api_error).
+
 Billing: strips ANTHROPIC_API_KEY from the child env so the subscription is used
 (--keep-api-key to disable). Each call has a wall-clock --deadline.
 """
 import argparse
 import concurrent.futures as cf
+import glob
 import json
 import os
+import re
 import sys
 import tempfile
 import threading
@@ -35,9 +54,43 @@ import _claude
 DEFAULT_TOOLS = ["Skill", "Read", "Grep", "Glob"]
 
 
+SKILL_PATH_RE = re.compile(r"""([^\s'"`;|&<>()]*/([A-Za-z0-9][A-Za-z0-9._:-]*)/SKILL\.md)$""")
+COMMAND_PATH_RE = re.compile(r"/commands/(.+)\.md$")
+
+
+def read_fire_name(path):
+    """Skill/command name a Read of `path` counts as a fire of, or None.
+    .../<name>/SKILL.md -> <name>; .../commands/a/b/c.md -> a:b:c."""
+    if not path or "*" in path:
+        return None
+    m = SKILL_PATH_RE.match(path)
+    if m and m.group(2) != "<name>":
+        return m.group(2)
+    m = COMMAND_PATH_RE.search(path)
+    if m:
+        return ":".join(x for x in m.group(1).split("/") if x) or None
+    return None
+
+
+def classify_error(text):
+    t = (text or "").lower()
+    if "429" in t or "rate limit" in t or "rate_limit" in t:
+        return "rate_limit"
+    if "529" in t or "overloaded" in t:
+        return "overloaded"
+    if "401" in t or "403" in t or "api key" in t or "authentication" in t or "unauthorized" in t:
+        return "auth"
+    if "deadline" in t or "timed out" in t or "timeout" in t:
+        return "timeout"
+    if "no usable stream output" in t:
+        return "no_output"
+    return "api_error"
+
+
 def parse_stream(text):
-    """Parse stream-json output -> dict(skills, start_tokens, result_ok, num_turns)."""
-    skills, first_usage, result = [], None, None
+    """Parse stream-json output -> dict(skills, read_skills, start_tokens, result_ok, num_turns,
+    session_id, result_error). skills = Skill tool calls; read_skills = Reads of SKILL.md/command files."""
+    skills, reads, first_usage, result, sid = [], [], None, None, None
     for line in text.splitlines():
         line = line.strip()
         if not line.startswith("{"):
@@ -46,6 +99,7 @@ def parse_stream(text):
             ev = json.loads(line)
         except ValueError:
             continue
+        sid = ev.get("session_id") or sid
         t = ev.get("type")
         if t == "assistant":
             msg = ev.get("message") or {}
@@ -54,39 +108,105 @@ def parse_stream(text):
                 first_usage = (u.get("input_tokens", 0) + u.get("cache_creation_input_tokens", 0)
                                + u.get("cache_read_input_tokens", 0))
             for b in msg.get("content") or []:
-                if isinstance(b, dict) and b.get("type") == "tool_use" and b.get("name") == "Skill":
-                    s = (b.get("input") or {}).get("skill")
+                if not (isinstance(b, dict) and b.get("type") == "tool_use"):
+                    continue
+                inp = b.get("input") or {}
+                if b.get("name") == "Skill":
+                    s = inp.get("skill")
                     if s:
                         skills.append(s)
+                elif b.get("name") == "Read":
+                    n = read_fire_name(inp.get("file_path") or "")
+                    if n and n not in reads:
+                        reads.append(n)
         elif t == "result":
             result = ev
-    return {"skills": skills, "start_tokens": first_usage,
-            "result_ok": bool(result) and not result.get("is_error"),
+    err = None
+    if result and result.get("is_error") and result.get("subtype") != "error_max_turns":
+        err = str(result.get("result") or result.get("subtype") or "error")
+    return {"skills": skills, "read_skills": reads, "start_tokens": first_usage, "session_id": sid,
+            "result_ok": bool(result) and not result.get("is_error"), "result_error": err,
             "num_turns": (result or {}).get("num_turns")}
 
 
 def skill_matches(fired, expected):
-    """A fired skill matches expected if equal or equal after stripping a plugin prefix."""
-    f, e = fired.lower(), expected.lower()
-    return f == e or f.split(":")[-1] == e.split(":")[-1]
+    """Exact match on the full namespaced name (case-insensitive): "a:b:c" matches only "a:b:c"."""
+    return fired.lower() == expected.lower()
 
 
-def build_args(prompt, arm_path, model=None, max_turns=2, tools=None):
-    args = ["-p", prompt, "--settings", arm_path, "--tools"] + list(tools or DEFAULT_TOOLS) + [
-        "--strict-mcp-config", "--mcp-config", '{"mcpServers":{}}',
-        "--max-turns", str(max_turns), "--output-format", "stream-json", "--verbose"]
+def expected_set(case):
+    """Acceptable names for a case: `expected_any` if present, else `skills`. "none" means no fire is acceptable."""
+    return list(case.get("expected_any") or case.get("skills") or [])
+
+
+def expectation_met(fired, case):
+    exp = expected_set(case)
+    if any(e.lower() == "none" for e in exp) and not fired:
+        return True
+    return any(skill_matches(f, e) for f in fired for e in exp if e.lower() != "none")
+
+
+def build_args(prompt, arm_path, model=None, max_turns=2, tools=None, extra_args=None):
+    extra = list(extra_args or [])
+    args = ["-p", prompt, "--settings", arm_path, "--tools"] + list(tools or DEFAULT_TOOLS)
+    if "--strict-mcp-config" not in extra:
+        args.append("--strict-mcp-config")
+    if "--mcp-config" not in extra:
+        args += ["--mcp-config", '{"mcpServers":{}}']
+    args += ["--max-turns", str(max_turns), "--output-format", "stream-json", "--verbose"]
     if model:
         args += ["--model", model]
-    return args
+    return args + extra
 
 
 def arm_state(arm_path, skill):
     with open(arm_path, encoding="utf-8") as fh:
         ov = json.load(fh).get("skillOverrides", {})
     for k, v in ov.items():
-        if k.lower() == skill.lower() or k.split(":")[-1].lower() == skill.split(":")[-1].lower():
+        if k.lower() == skill.lower():
             return v
     return "on"
+
+
+def read_listing(session_id, env_extra=None):
+    """Parse the skill_listing attachment(s) of a session transcript, or None if unavailable.
+    Looks in $CLAUDE_CONFIG_DIR (or ~/.claude)/projects/*/<session_id>.jsonl."""
+    if not session_id:
+        return None
+    try:
+        base = (env_extra or {}).get("CLAUDE_CONFIG_DIR") or os.environ.get("CLAUDE_CONFIG_DIR") \
+            or os.path.expanduser("~/.claude")
+        paths = glob.glob(os.path.join(glob.escape(base), "projects", "*", glob.escape(session_id) + ".jsonl"))
+        if not paths:
+            return None
+        chars, name_only, with_desc, found = 0, [], [], False
+        with open(paths[0], encoding="utf-8", errors="replace") as fh:
+            for line in fh:
+                try:
+                    ev = json.loads(line)
+                except ValueError:
+                    continue
+                att = ev.get("attachment") if isinstance(ev, dict) else None
+                if not isinstance(att, dict) or att.get("type") != "skill_listing":
+                    continue
+                content = att.get("content")
+                if not isinstance(content, str):
+                    continue
+                found = True
+                chars += len(content)
+                for ln in content.splitlines():
+                    if not ln.startswith("- "):
+                        continue
+                    name, sep, _desc = ln[2:].partition(": ")
+                    name = name.strip()
+                    if name:
+                        (with_desc if sep else name_only).append(name)
+        if not found:
+            return None
+        return {"listing_chars": chars, "listing_entries": len(name_only) + len(with_desc),
+                "name_only": name_only, "with_description": with_desc}
+    except Exception:  # noqa: BLE001 - listing capture must never break a run
+        return None
 
 
 def load_meta(arm_path):
@@ -101,11 +221,11 @@ def load_meta(arm_path):
 def unrename(skills, meta):
     """Map fired (possibly renamed, possibly plugin-prefixed) names back to original names."""
     ren = meta.get("rename") or {}
-    return [ren.get(s.split(":")[-1], s) for s in skills]
+    return [ren.get(s, s) for s in skills]
 
 
 def is_excluded(case, arm_path):
-    exp = case.get("skills") or []
+    exp = [e for e in expected_set(case) if e.lower() != "none"]
     fwd = {old: new for new, old in (load_meta(arm_path).get("rename") or {}).items()}
     return (case.get("label") == "positive" and exp
             and all(arm_state(arm_path, fwd.get(s, s)) in ("user-invocable-only", "off") for s in exp))
@@ -137,17 +257,31 @@ def run_one(case, arm, arm_path, rep, opts, arm_idx=0):
     meta = load_meta(arm_path)
     if meta.get("control"):
         rec["control"] = True
+    if case.get("expected_any"):
+        rec["expected_any"] = list(case["expected_any"])
+    arm_env = {str(k): str(v) for k, v in (meta.get("env") or {}).items()}
     try:
         out, _rc = _claude.run_claude(
-            build_args(case["prompt"], arm_path, opts.model, opts.max_turns, opts.tools),
+            build_args(case["prompt"], arm_path, opts.model, opts.max_turns, opts.tools, meta.get("claude_args")),
             deadline=opts.deadline, cwd=meta.get("cwd") or opts.cwd, strip_api_key=not opts.keep_api_key,
-            claude_bin=opts.claude_bin)
+            extra_env=arm_env or None, claude_bin=opts.claude_bin)
         p = parse_stream(out)
-        if not p["result_ok"] and not p["skills"] and p["start_tokens"] is None:
+        if not p["result_ok"] and not p["skills"] and not p["read_skills"] and p["start_tokens"] is None \
+                and not p["result_error"]:
             raise _claude.ClaudeError("no usable stream output: %r" % out[:200])
-        rec.update(skills=unrename(p["skills"], meta), start_tokens=p["start_tokens"], num_turns=p["num_turns"])
+        fired = unrename(p["skills"], meta)
+        via = {s: "skill" for s in fired}
+        for s in unrename(p["read_skills"], meta):
+            if s not in via:
+                via[s] = "read"
+                fired.append(s)
+        rec.update(skills=fired, fired_via=via, start_tokens=p["start_tokens"], num_turns=p["num_turns"],
+                   session_id=p["session_id"], listing=read_listing(p["session_id"], arm_env))
+        if p["result_error"]:
+            rec.update(error=p["result_error"][:300], is_error=True, error_class=classify_error(p["result_error"]))
     except Exception as e:  # noqa: BLE001 - record and continue
-        rec.update(error=str(e)[:300], skills=[], start_tokens=None)
+        rec.update(error=str(e)[:300], is_error=True, error_class=classify_error(str(e)), skills=[],
+                   start_tokens=None, listing=None)
     rec["secs"] = round(time.time() - t0, 1)
     return rec
 
