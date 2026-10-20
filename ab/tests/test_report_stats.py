@@ -74,6 +74,43 @@ class AggregationTests(unittest.TestCase):
         a = report.build_report(recs, aggregate="all")["arms"]["a"]["prompt"]
         self.assertEqual(a["neg_fire"], (0, 1))
 
+    def test_tie_is_conservative_for_safety_metrics(self):
+        # 1 of 2 reps: tied negative counts as fired, tied wrong pick counts as wrong, tied hit is a miss
+        recs = []
+        for j, s in enumerate([["other"], []]):
+            recs.append(rec("a", 0, "n0", j, label="negative", skills=s))
+            recs.append(rec("a", 0, "w0", j, skills=s))
+        for j, s in enumerate([["deploy-helper"], []]):
+            recs.append(rec("a", 0, "h0", j, skills=s))
+        a = report.build_report(recs)["arms"]["a"]["prompt"]
+        self.assertEqual(a["neg_fire"], (1, 1))
+        self.assertEqual(a["wrong"], (1, 2))
+        self.assertEqual(a["recall"], (0, 2))
+
+
+class ExpectNoneAndReadSkillsTests(unittest.TestCase):
+    def test_expect_none_row_is_negative(self):
+        r = rec("a", 0, "n", 0, skills=["other"])
+        r["expect_none"] = True
+        r["expected"] = []
+        p = report.build_report([r])["arms"]["a"]["prompt"]
+        self.assertEqual(p["neg_fire"], (1, 1))
+        self.assertEqual(p["recall"], (0, 0))
+        self.assertEqual(p["wrong"], (0, 0))
+
+    def test_read_skills_never_in_recall_and_shown_separately(self):
+        recs = []
+        for i in range(2):
+            r = rec("a", 0, "p%d" % i, 0, skills=[])
+            r["read_skills"] = ["deploy-helper"] if i == 0 else []
+            recs.append(r)
+        rep = report.build_report(recs)
+        p = rep["arms"]["a"]["prompt"]
+        self.assertEqual(p["recall"], (0, 2))
+        self.assertEqual(p["read_fires"], (1, 2))
+        self.assertEqual(rep["arms"]["a"]["recall"], (0, 2))
+        self.assertIn("read-only", report.render(rep))
+
 
 class NonInferiorityTests(unittest.TestCase):
     def pair(self, n_same, b, c, **kw):
@@ -103,7 +140,7 @@ class NonInferiorityTests(unittest.TestCase):
         self.assertEqual(self.pair(30, 1, 0, margin_pp=30)["verdict"], "non-inferior")
 
     def test_lower_bound_value(self):
-        p = self.pair(90, 6, 4)  # n=100, d=-0.02, var=(10/100-0.0004)
+        p = self.pair(90, 6, 4)  # n=100, d=-0.02, var=(11/100-0.0004), 11 = 10 discordant + 1 pseudo pair
         se = ((11 / 100 - 0.0004) ** 0.5) / 10
         self.assertAlmostEqual(p["diff_pp"], -2.0, delta=1e-9)
         self.assertAlmostEqual(p["lower_pp"], 100 * (-0.02 - 1.6448536269514722 * se), delta=1e-6)
@@ -155,6 +192,8 @@ class EntryTableTests(unittest.TestCase):
         json.dumps(rep)
 
     def test_cli_flags(self):
+        import contextlib
+        import io
         import os
         import tempfile
         with tempfile.TemporaryDirectory() as d:
@@ -162,8 +201,9 @@ class EntryTableTests(unittest.TestCase):
             with open(p, "w") as fh:
                 for r in arm_recs("a", 0, [[1, 0]] * 3) + arm_recs("b", 1, [[1, 1]] * 3):
                     fh.write(json.dumps(r) + "\n")
-            self.assertEqual(report.main([p, "--aggregate", "any", "--margin-pp", "10",
-                                          "--max-error-rate", "0.1"]), 0)
+            with contextlib.redirect_stdout(io.StringIO()):
+                self.assertEqual(report.main([p, "--aggregate", "any", "--margin-pp", "10",
+                                              "--max-error-rate", "0.1"]), 0)
 
 
 if __name__ == "__main__":

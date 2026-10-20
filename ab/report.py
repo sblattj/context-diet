@@ -1,17 +1,22 @@
 #!/usr/bin/env python3
 """Report per-arm trigger metrics with Wilson 95% CIs and paired exact McNemar tests.
 
-Metrics (run level, excluded/errored runs dropped):
+Metrics (prompt level; excluded/errored runs dropped, reps collapsed by --aggregate first):
   recall            positives where an expected skill fired
   recall (implicit) same, restricted to positives that do not name the skill
   wrong skill       positives where skills fired but none was expected
-  fires on negatives
+  fires on negatives (rows with label negative or expect_none true)
+  read-only fires   informational: positives whose expected skill was only read (read_skills), never in recall
   median start tokens (first assistant turn input+cache usage)
 Savings: per case, the median start tokens over its usable reps, per arm; each non-baseline
 arm is paired with the baseline on cases where both have a value. Ratio = arm/baseline per
 case; reported as the geometric-mean ratio (percent change) with a 95% percentile bootstrap
 CI (resampling cases, 2000 resamples, --seed) and an exact two-sided sign test on
 cheaper vs costlier cases (ties excluded from the test, counted in the case total).
+Majority needs strictly more than half the reps. An exact tie resolves conservatively: a tied
+positive is a miss (recall), a tied negative counts as fired and a tied wrong pick counts as wrong.
+Read-only fires (expected skill only read, record key read_skills) are an informational column and
+never count toward recall. Rows with expect_none true are negatives.
 Unit of analysis is the prompt (case). Reps of a case are aggregated by a rule declared up front
 (--aggregate majority|all|any, default majority) before any test or rate; every rate below is
 over prompts, never runs. Paired test: each non-baseline arm vs the baseline (first arm in run
@@ -129,14 +134,27 @@ def is_err(rec):
     return bool(rec.get("error") or rec.get("is_error"))
 
 
-def agg(vals, rule):
-    """Collapse one prompt's per-rep booleans by the declared rule."""
+def eff_label(rec):
+    """expect_none rows are negatives whatever their label says."""
+    return "negative" if rec.get("expect_none") else rec["label"]
+
+
+def is_read_hit(rec):
+    return any(skill_matches(f, e) for f in rec.get("read_skills") or [] for e in rec["expected"])
+
+
+def agg(vals, rule, tie=False):
+    """Collapse one prompt's per-rep booleans by the declared rule.
+
+    Majority needs strictly more than half. An exact tie (e.g. 1 of 2 reps) resolves to `tie`:
+    False for hit (a tied positive is a miss), True for the safety-direction metrics wrong and
+    fired (a tied negative counts as fired, a tied wrong pick counts as wrong)."""
     n, k = len(vals), sum(1 for v in vals if v)
     if rule == "all":
         return n > 0 and k == n
     if rule == "any":
         return k > 0
-    return k * 2 > n
+    return k * 2 > n or (tie and k * 2 == n and n > 0)
 
 
 def prompts(recs, rule="majority"):
@@ -147,18 +165,19 @@ def prompts(recs, rule="majority"):
     out = {}
     for c, rs in by.items():
         first = rs[0]
-        out[c] = {"label": first["label"], "expected": first.get("expected") or [],
+        out[c] = {"label": eff_label(first), "expected": first.get("expected") or [],
                   "explicit": bool(first.get("explicit")), "reps": len(rs),
                   "hit": agg([is_hit(r) for r in rs], rule),
-                  "wrong": agg([bool(r["skills"]) and not is_hit(r) for r in rs], rule),
-                  "fired": agg([bool(r["skills"]) for r in rs], rule)}
+                  "read_hit": agg([is_read_hit(r) for r in rs], rule),
+                  "wrong": agg([bool(r["skills"]) and not is_hit(r) for r in rs], rule, tie=True),
+                  "fired": agg([bool(r["skills"]) for r in rs], rule, tie=True)}
     return out
 
 
 def run_level(recs):
     """Legacy run-level counts (every rep counted once); kept for callers of the old keys."""
-    pos = [r for r in recs if r["label"] == "positive"]
-    neg = [r for r in recs if r["label"] == "negative"]
+    pos = [r for r in recs if eff_label(r) == "positive"]
+    neg = [r for r in recs if eff_label(r) == "negative"]
     imp = [r for r in pos if not r.get("explicit")]
     return {
         "recall": (sum(is_hit(r) for r in pos), len(pos)),
@@ -179,6 +198,7 @@ def summarize(recs, rule="majority"):
         "recall": (sum(p["hit"] for p in pos), len(pos)),
         "recall_implicit": (sum(p["hit"] for p in imp), len(imp)),
         "wrong": (sum(p["wrong"] for p in pos), len(pos)),
+        "read_fires": (sum(p["read_hit"] for p in pos), len(pos)),
         "neg_fire": (sum(p["fired"] for p in neg), len(neg)),
         "median_tokens": statistics.median(toks) if toks else None,
     }
@@ -186,7 +206,7 @@ def summarize(recs, rule="majority"):
 
 def majority(recs):
     """case id -> bool majority hit over positive records."""
-    return {c: p["hit"] for c, p in prompts([r for r in recs if r["label"] == "positive"]).items()}
+    return {c: p["hit"] for c, p in prompts([r for r in recs if eff_label(r) == "positive"]).items()}
 
 
 def skill_rates(recs, rule="majority"):
@@ -215,7 +235,7 @@ def paired_noninferiority(b, c, n, margin_pp=DEFAULT_MARGIN_PP):
 
 
 def entry_table(per, arms, base, rule):
-    """expected skill -> per-arm prompt recall [k, n], delta vs baseline (pp), n (baseline prompts)."""
+    """expected skill -> per-arm prompt recall [k, n], delta vs baseline (pp), n (max prompt count across arms)."""
     rates = {a: skill_rates(per[a], rule) for a in arms}
     out = {}
     for s in sorted({s for a in arms for s in rates[a]}):
@@ -284,15 +304,15 @@ def build_report(recs, baseline=None, synthetic="exclude", seed=0, controls=(), 
            "errors": sum(1 for r in recs if is_err(r)),
            "excluded": sum(1 for r in recs if r.get("excluded"))}
     for a in arms:
-        out["arms"][a] = {**run_level(per[a]), "median_tokens": summarize(per[a], aggregate)["median_tokens"],
-                          "prompt": summarize(per[a], aggregate)}
+        summ = summarize(per[a], aggregate)
+        out["arms"][a] = {**run_level(per[a]), "median_tokens": summ["median_tokens"], "prompt": summ}
         ne = sum(1 for r in recs if r["arm"] == a and is_err(r) and not r.get("excluded"))
         out["arms"][a]["error_rate"] = (ne, ne + len(per[a]))
         if synthetic == "exclude":  # shown separately, never mixed into the real numbers
             sp = [p for p in prompts([r for r in synth_all if r["arm"] == a], aggregate).values()
                   if p["label"] == "positive"]
             out["arms"][a]["synthetic_recall_prompt"] = (sum(p["hit"] for p in sp), len(sp))
-            sr = [r for r in synth_all if r["arm"] == a and r["label"] == "positive"]
+            sr = [r for r in synth_all if r["arm"] == a and eff_label(r) == "positive"]
             out["arms"][a]["synthetic_recall"] = (sum(is_hit(r) for r in sr), len(sr))
     bm = {c: p["hit"] for c, p in prompts(per[base], aggregate).items() if p["label"] == "positive"} if base else {}
     for a in arms:
@@ -332,16 +352,17 @@ def render(rep):
         rep.get("aggregate", "majority"), rep.get("margin_pp", DEFAULT_MARGIN_PP),
         100 * rep.get("max_error_rate", DEFAULT_MAX_ERROR_RATE)))
     L.append("")
-    L.append("%-14s %-24s %-24s %-22s %-22s %s" % ("arm", "recall", "recall (implicit)", "wrong skill",
-                                                     "fires on negatives", "median start tok"))
+    L.append("%-14s %-24s %-24s %-22s %-22s %-22s %s" % (
+        "arm", "recall", "recall (implicit)", "wrong skill", "fires on negatives", "read-only fires", "median start tok"))
     L.append("(per-arm columns are prompt-level; run-level counts stay in the JSON under recall, wrong, neg_fire)")
     for a, s in rep["arms"].items():
         if s.get("control"):
             a = a + " [control]"
         mt = "%.0f" % s["median_tokens"] if s["median_tokens"] is not None else "n/a"
         pm = s.get("prompt", s)
-        L.append("%-14s %-24s %-24s %-22s %-22s %s" % (
-            a, fmt(*pm["recall"]), fmt(*pm["recall_implicit"]), fmt(*pm["wrong"]), fmt(*pm["neg_fire"]), mt))
+        L.append("%-14s %-24s %-24s %-22s %-22s %-22s %s" % (
+            a, fmt(*pm["recall"]), fmt(*pm["recall_implicit"]), fmt(*pm["wrong"]), fmt(*pm["neg_fire"]),
+            fmt(*pm["read_fires"]) if "read_fires" in pm else "-", mt))
         sr = s.get("synthetic_recall_prompt") or s.get("synthetic_recall")
         if sr and sr[1]:
             L.append("%-14s synthetic-only recall (not in the numbers above): %s" % ("", fmt(*sr)))
@@ -398,7 +419,9 @@ def main(argv=None):
     ap.add_argument("--control", action="append", default=[], metavar="ARM",
                     help="also treat ARM as a negative control (normally read from the records; repeatable)")
     ap.add_argument("--aggregate", choices=AGGREGATES, default="majority",
-                    help="how a prompt's reps collapse to one outcome, fixed before any test (default majority)")
+                    help="how a prompt's reps collapse to one outcome, fixed before any test (default majority; "
+                         "majority is strictly more than half, ties count as miss for recall and as "
+                         "fired/wrong for negatives and wrong picks)")
     ap.add_argument("--margin-pp", type=float, default=DEFAULT_MARGIN_PP,
                     help="non-inferiority margin in percentage points of recall (default 5)")
     ap.add_argument("--max-error-rate", type=float, default=DEFAULT_MAX_ERROR_RATE,
