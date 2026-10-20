@@ -30,8 +30,10 @@ Matching is exact on the full namespaced name ("a:b:c" matches only "a:b:c"; "co
 
 Each record also has "listing" (listing_chars, listing_entries, name_only, with_description,
 parsed from the session transcript's skill_listing attachment; null if unavailable) and
-"fired_via": {name: "skill" | "read"}. "skills" lists Skill-tool fires first (the primary
-signal), then skills/commands whose SKILL.md / command .md was Read. Provider/API errors are
+"fired_via": {name: "skill" | "read"}. "skills" lists Skill-tool fires only (the primary
+signal); "read_skills" lists skills/commands whose SKILL.md / command .md was Read (full namespaced
+name from the path: .claude/skills or plugin skills/<name>, .claude/commands or plugin commands/a/b.md -> a:b).
+"expected" is the sorted acceptable names minus "none"; "expect_none" is true for negatives. Provider/API errors are
 kept as rows with error, is_error=true and error_class (rate_limit, overloaded, auth,
 timeout, no_output, api_error).
 
@@ -54,18 +56,20 @@ import _claude
 DEFAULT_TOOLS = ["Skill", "Read", "Grep", "Glob"]
 
 
-SKILL_PATH_RE = re.compile(r"""([^\s'"`;|&<>()]*/([A-Za-z0-9][A-Za-z0-9._:-]*)/SKILL\.md)$""")
-COMMAND_PATH_RE = re.compile(r"/commands/(.+)\.md$")
+SKILL_PATH_RE = re.compile(r"(?:^|/)skills/([^/\s]+)/SKILL\.md$")
+COMMAND_PATH_RE = re.compile(r"(?:(?:^|/)\.claude/|/plugins/(?:[^\s]*/)?)commands/(.+)\.md$")
 
 
 def read_fire_name(path):
-    """Skill/command name a Read of `path` counts as a fire of, or None.
-    .../<name>/SKILL.md -> <name>; .../commands/a/b/c.md -> a:b:c."""
+    """Full namespaced name a Read of `path` counts as a fire of, or None. Anchored to real roots:
+    .../.claude/skills/<name>/SKILL.md or plugin .../skills/<name>/SKILL.md -> <name>;
+    .../.claude/commands/a/b/c.md or plugin .../commands/a/b/c.md -> a:b:c.
+    Other paths (docs/commands/x.md, docs/skills/a/b/SKILL.md) do not count."""
     if not path or "*" in path:
         return None
-    m = SKILL_PATH_RE.match(path)
-    if m and m.group(2) != "<name>":
-        return m.group(2)
+    m = SKILL_PATH_RE.search(path)
+    if m and m.group(1) != "<name>":
+        return m.group(1)
     m = COMMAND_PATH_RE.search(path)
     if m:
         return ":".join(x for x in m.group(1).split("/") if x) or None
@@ -74,11 +78,14 @@ def read_fire_name(path):
 
 def classify_error(text):
     t = (text or "").lower()
-    if "429" in t or "rate limit" in t or "rate_limit" in t:
+
+    def code(c):
+        return re.search(r"\b%s\b" % c, t)
+    if code("429") or "rate limit" in t or "rate_limit" in t:
         return "rate_limit"
-    if "529" in t or "overloaded" in t:
+    if code("529") or "overloaded" in t:
         return "overloaded"
-    if "401" in t or "403" in t or "api key" in t or "authentication" in t or "unauthorized" in t:
+    if code("401") or code("403") or "api key" in t or "authentication" in t or "unauthorized" in t:
         return "auth"
     if "deadline" in t or "timed out" in t or "timeout" in t:
         return "timeout"
@@ -149,9 +156,9 @@ def expectation_met(fired, case):
 def build_args(prompt, arm_path, model=None, max_turns=2, tools=None, extra_args=None):
     extra = list(extra_args or [])
     args = ["-p", prompt, "--settings", arm_path, "--tools"] + list(tools or DEFAULT_TOOLS)
-    if "--strict-mcp-config" not in extra:
+    if "--strict-mcp-config" not in extra and not any(x.startswith("--strict-mcp-config=") for x in extra):
         args.append("--strict-mcp-config")
-    if "--mcp-config" not in extra:
+    if "--mcp-config" not in extra and not any(x.startswith("--mcp-config=") for x in extra):
         args += ["--mcp-config", '{"mcpServers":{}}']
     args += ["--max-turns", str(max_turns), "--output-format", "stream-json", "--verbose"]
     if model:
@@ -247,9 +254,12 @@ def done_keys(out_path, keep_errors):
 
 def run_one(case, arm, arm_path, rep, opts, arm_idx=0):
     rec = {"key": "%s|%s|%d" % (arm, case["id"], rep), "arm": arm, "arm_idx": arm_idx, "case": case["id"], "rep": rep,
-           "label": case["label"], "expected": case.get("skills", []),
+           "label": case["label"],
+           "expected": sorted(e for e in expected_set(case) if e.lower() != "none"),
            "explicit": bool(case.get("explicit")), "synthetic": bool(case.get("synthetic")), "prompt": case["prompt"][:200],
            "ts": int(time.time())}
+    if case.get("label") == "negative" or any(e.lower() == "none" for e in expected_set(case)):
+        rec["expect_none"] = True
     if is_excluded(case, arm_path):
         rec.update(excluded=True, skills=[], start_tokens=None)
         return rec
@@ -270,12 +280,11 @@ def run_one(case, arm, arm_path, rep, opts, arm_idx=0):
                 and not p["result_error"]:
             raise _claude.ClaudeError("no usable stream output: %r" % out[:200])
         fired = unrename(p["skills"], meta)
+        reads = [s for s in dict.fromkeys(unrename(p["read_skills"], meta))]
         via = {s: "skill" for s in fired}
-        for s in unrename(p["read_skills"], meta):
-            if s not in via:
-                via[s] = "read"
-                fired.append(s)
-        rec.update(skills=fired, fired_via=via, start_tokens=p["start_tokens"], num_turns=p["num_turns"],
+        for s in reads:
+            via.setdefault(s, "read")
+        rec.update(skills=fired, read_skills=reads, fired_via=via, start_tokens=p["start_tokens"], num_turns=p["num_turns"],
                    session_id=p["session_id"], listing=read_listing(p["session_id"], arm_env))
         if p["result_error"]:
             rec.update(error=p["result_error"][:300], is_error=True, error_class=classify_error(p["result_error"]))

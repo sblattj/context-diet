@@ -134,7 +134,8 @@ class ReadFireAndErrorTests(unittest.TestCase):
             opts = mock.Mock(model="m", max_turns=2, tools=None, deadline=5, cwd=d, keep_api_key=False, claude_bin="c")
             with mock.patch.object(_claude, "run_claude", lambda *a, **k: (out, 0)):
                 rec = run.run_one({"id": "c", "prompt": "p", "label": "negative", "skills": []}, "a", arm, 0, opts)
-            self.assertEqual(rec["skills"], ["s1", "s2"])
+            self.assertEqual(rec["skills"], ["s1"])
+            self.assertEqual(rec["read_skills"], ["s2"])
             self.assertEqual(rec["fired_via"], {"s1": "skill", "s2": "read"})
 
     def run_err(self, out=None, exc=None):
@@ -170,6 +171,65 @@ class ReadFireAndErrorTests(unittest.TestCase):
     def test_max_turns_is_not_error(self):
         rec = self.run_err(stream(tool_use("Skill", skill="x"), result(subtype="error_max_turns", is_error=True)))
         self.assertNotIn("error", rec)
+
+
+class ReviewFixTests(unittest.TestCase):
+    def one(self, case, out=None, claude_args=None):
+        with tempfile.TemporaryDirectory() as d:
+            arm = os.path.join(d, "a.json")
+            json.dump({}, open(arm, "w"))
+            if claude_args:
+                json.dump({"claude_args": claude_args}, open(os.path.join(d, "a.meta.json"), "w"))
+            self.seen = []
+            opts = mock.Mock(model="m", max_turns=2, tools=None, deadline=5, cwd=d, keep_api_key=False, claude_bin="c")
+
+            def fake(args, **k):
+                self.seen = args
+                return (out or stream(result())), 0
+            with mock.patch.object(_claude, "run_claude", fake):
+                return run.run_one(dict({"id": "c", "prompt": "p", "label": "positive"}, **case), "a", arm, 0, opts)
+
+    def test_expected_recorded_from_expected_set(self):
+        rec = self.one({"skills": [], "expected_any": ["b:x", "a:y"]})
+        self.assertEqual(rec["expected"], ["a:y", "b:x"])
+        self.assertFalse(rec.get("expect_none"))
+        rec = self.one({"label": "negative", "skills": ["none"]})
+        self.assertEqual(rec["expected"], [])
+        self.assertTrue(rec["expect_none"])
+        rec = self.one({"label": "negative", "expected_any": ["none", "z"]})
+        self.assertEqual(rec["expected"], ["z"])
+        self.assertTrue(rec["expect_none"])
+
+    def test_read_fire_namespaced_and_anchored(self):
+        f = run.read_fire_name
+        self.assertEqual(f("/h/.claude/commands/team/dev/context.md"), "team:dev:context")
+        self.assertEqual(f(".claude/commands/ctx.md"), "ctx")
+        self.assertEqual(f("/h/.claude/skills/team:dev:pr-walkthrough/SKILL.md"), "team:dev:pr-walkthrough")
+        self.assertEqual(f("/p/plugins/cache/plug/1.0/commands/a/b.md"), "a:b")
+        self.assertEqual(f("/p/plugins/cache/plug/1.0/skills/deploy/SKILL.md"), "deploy")
+        self.assertIsNone(f("/repo/docs/commands/x.md"))
+        self.assertIsNone(f("/repo/commands/x.md"))
+        self.assertIsNone(f("/repo/docs/skills/a/b/SKILL.md"))
+
+    def test_reads_do_not_pollute_skills(self):
+        out = stream(tool_use("Skill", skill="s1"),
+                     tool_use("Read", file_path="/h/.claude/skills/s2/SKILL.md"), result())
+        rec = self.one({"skills": []}, out)
+        self.assertEqual(rec["skills"], ["s1"])
+        self.assertEqual(rec["read_skills"], ["s2"])
+        self.assertEqual(rec["fired_via"], {"s1": "skill", "s2": "read"})
+
+    def test_status_codes_word_boundary(self):
+        self.assertEqual(run.classify_error("request id req_14290311 failed"), "api_error")
+        self.assertEqual(run.classify_error("id 5290x"), "api_error")
+        self.assertEqual(run.classify_error("HTTP 429"), "rate_limit")
+        self.assertEqual(run.classify_error("status=401."), "auth")
+
+    def test_mcp_config_equals_form(self):
+        self.one({"skills": []}, claude_args=["--mcp-config={}"])
+        self.assertEqual(sum(1 for a in self.seen if a.startswith("--mcp-config")), 1)
+        a = run.build_args("hi", "/x.json", "m", 2, None, ["--mcp-config={}", "--strict-mcp-config"])
+        self.assertEqual(a.count("--strict-mcp-config"), 1)
 
 
 if __name__ == "__main__":
