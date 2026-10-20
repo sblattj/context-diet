@@ -99,10 +99,78 @@ class ControlCommandTests(unittest.TestCase):
         self.assertEqual(self.make(), 0)
         self.assertEqual(self.meta()["command_rename"], {})
 
+    def rename_args(self, mapping, *extra):
+        rf = os.path.join(self.tmp, "ren.json")
+        put(rf, json.dumps(mapping))
+        return mra.main(["--skills-dir", self.skills, "--base", self.base, "--rename", rf,
+                         "--name", "renamed", "--out", self.out] + list(extra))
+
+    def err(self, argv):
+        import contextlib
+        import io
+        buf = io.StringIO()
+        with contextlib.redirect_stderr(buf):
+            try:
+                rc = mra.main(argv)
+            except SystemExit as e:
+                rc = e.code
+        return rc, buf.getvalue()
+
     def test_strip_requires_control(self):
-        with self.assertRaises(SystemExit):
-            mra.main(["--skills-dir", self.skills, "--base", self.base, "--rename", self.base,
-                      "--name", "x", "--out", self.out, "--control-strip-descriptions"])
+        rc, msg = self.err(["--skills-dir", self.skills, "--base", self.base, "--rename", self.base,
+                            "--name", "x", "--out", self.out, "--control-strip-descriptions"])
+        self.assertEqual(rc, 2)
+        self.assertIn("requires --control", msg)
+
+    def test_plain_rename_keeps_existing_cwd_commands(self):
+        cwd = os.path.join(self.tmp, "w")
+        put(os.path.join(cwd, ".claude", "commands", "keep.md"), "keep\n")
+        self.assertEqual(self.rename_args({"deploy-helper": "ship-it"}, "--cwd", cwd), 0)
+        self.assertTrue(os.path.exists(os.path.join(cwd, ".claude", "commands", "keep.md")))
+
+    def test_control_without_commands_keeps_existing_cwd_commands(self):
+        import shutil
+        shutil.rmtree(os.path.join(self.claude, "commands"))
+        cwd = os.path.join(self.tmp, "w")
+        put(os.path.join(cwd, ".claude", "commands", "keep.md"), "keep\n")
+        self.assertEqual(self.make("--cwd", cwd), 0)
+        self.assertTrue(os.path.exists(os.path.join(cwd, ".claude", "commands", "keep.md")))
+
+    def test_missing_explicit_commands_dir_exits_2(self):
+        for extra in (["--control"], []):
+            rf = os.path.join(self.tmp, "ren.json")
+            put(rf, json.dumps({"deploy-helper": "ship-it"}))
+            argv = ["--skills-dir", self.skills, "--base", self.base, "--out", self.out,
+                    "--commands-dir", os.path.join(self.tmp, "nope")]
+            argv += extra or ["--rename", rf, "--name", "r"]
+            rc, _ = self.err(argv)
+            self.assertEqual(rc, 2)
+
+    def test_commands_dir_requires_command_mode(self):
+        rc, msg = self.err(["--skills-dir", self.skills, "--base", self.base, "--out", self.out,
+                            "--commands-dir", os.path.join(self.claude, "commands")])
+        self.assertEqual(rc, 2)
+        self.assertIn("--commands-dir requires", msg)
+
+    def test_rename_arm_renames_commands(self):
+        cwd = os.path.join(self.tmp, "w")
+        put(os.path.join(cwd, ".claude", "commands", "stale.md"), "stale\n")
+        self.assertEqual(self.rename_args({"deploy-helper": "ship-it",
+                                           "team:dev:context": "load-team-context"}, "--cwd", cwd), 0)
+        meta = json.load(open(os.path.join(self.out, "renamed.meta.json")))
+        self.assertEqual(meta["command_rename"], {"team:dev:context": "team:dev:load-team-context"})
+        self.assertNotIn("control", meta)
+        base = os.path.join(cwd, ".claude", "commands")
+        self.assertIn("Do it", open(os.path.join(base, "team", "dev", "load-team-context.md")).read())
+        self.assertFalse(os.path.exists(os.path.join(base, "team", "dev", "plan.md")))
+        ov = json.load(open(os.path.join(self.out, "renamed.json")))["skillOverrides"]
+        self.assertEqual(ov["team:dev:context"], "off")
+        self.assertEqual(ov["team:dev:load-team-context"], "name-only")
+        self.assertEqual(run.unrename(["team:dev:load-team-context", "ship-it"], meta),
+                         ["team:dev:context", "deploy-helper"])
+
+    def test_rename_unknown_key_exits_2(self):
+        self.assertEqual(self.rename_args({"nothing:here": "x"}), 2)
 
 
 if __name__ == "__main__":

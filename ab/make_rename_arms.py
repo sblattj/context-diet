@@ -9,7 +9,7 @@ Writes, for arm NAME:
                       original set to "off" and each new name set to --state
   OUT/NAME.meta.json  {"cwd": CWD, "rename": {new: old}} for run.py
   CWD/.claude/skills/<new>/SKILL.md   copies with `name:` rewritten (project skills)
-  CWD/.claude/commands/<dirs>/<new>.md  command copies (--control only), directory kept
+  CWD/.claude/commands/<dirs>/<new>.md  command copies (--control or --rename), directory kept
 
 run.py runs this arm's cases in CWD and maps fired names back to the originals,
 so report.py compares arms on the original skill names.
@@ -30,6 +30,10 @@ The meta gets "control": true; run.py copies that onto every record and report.p
 labels the arm `control` and prints a calibration line instead of a verdict.
   make_rename_arms.py --skills-dir ~/.claude/skills --base arms/before.json \\
       --control --out arms            # arm name defaults to "control"
+
+RENAME + COMMANDS: a key in renames.json that is not a skill dir but is a command full name
+("team:dev:context") renames that command's leaf; the value is the new leaf name. The
+CWD/.claude/commands dir is only replaced when this arm writes commands.
 
 Example:
   make_rename_arms.py --skills-dir ~/.claude/skills --base arms/before.json \\
@@ -99,19 +103,35 @@ def find_commands(commands_dir):
     return sorted(found)
 
 
-def build_commands(commands_dir, state="name-only", strip=False):
-    """Opaque-rename command leaves. Return (overrides, files {new rel path: text}, {old full: new full})."""
+def build_commands(commands_dir, state="name-only", strip=False, rename=None, prefix=""):
+    """Rename command leaves. Return (overrides, files {new rel path: text}, {old full: new full}).
+
+    rename None: every command gets an opaque leaf (cmd-01, ...). Otherwise rename is
+    {old full name: new leaf} and only those commands are written (directory kept)."""
     rels = find_commands(commands_dir)
     width = max(2, len(str(len(rels))))
     ov, files, full = {}, {}, {}
+    if rename is not None:
+        known = {r[:-3].replace("/", ":") for r in rels}
+        for old in rename:
+            if old not in known:
+                raise ValueError("no skill or command %r" % old)
     for i, rel in enumerate(rels):
         parts = rel[:-3].split("/")
-        leaf = "cmd-%0*d" % (width, i + 1)
+        old_full = ":".join(parts)
+        if rename is None:
+            leaf = "cmd-%0*d" % (width, i + 1)
+        elif old_full in rename:
+            leaf = prefix + str(rename[old_full]).split(":")[-1]
+            if not NAME_RE.match(leaf):
+                raise ValueError("bad command name %r (lowercase, digits, hyphens, max 64)" % leaf)
+        else:
+            continue
         new_rel = "/".join(parts[:-1] + [leaf]) + ".md"
         with open(os.path.join(commands_dir, *rel.split("/"))) as fh:
             text = fh.read()
         files[new_rel] = strip_description(text) if strip else text
-        old_full, new_full = ":".join(parts), ":".join(parts[:-1] + [leaf])
+        new_full = ":".join(parts[:-1] + [leaf])
         full[old_full] = new_full
         ov[old_full] = "off"
         ov[new_full] = state
@@ -126,7 +146,8 @@ def main(argv=None):
     ap.add_argument("--control", action="store_true",
                     help="negative control: opaque names for every skill, state name-only, meta control=true")
     ap.add_argument("--commands-dir", default=None,
-                    help="commands dir for --control (default: ../commands next to --skills-dir if present)")
+                    help="commands dir (default: ../commands next to --skills-dir if present; an explicit "
+                         "path must exist). Needs --control or --rename")
     ap.add_argument("--control-strip-descriptions", action="store_true",
                     help="with --control: blank descriptions of control skills and commands")
     ap.add_argument("--name", help="arm name (default with --control: control)")
@@ -141,6 +162,8 @@ def main(argv=None):
         a.name = a.name or "control"
         a.state = "name-only"
         a.prefix = ""
+    if a.commands_dir and not (a.control or a.rename):
+        ap.error("--commands-dir requires --control or --rename")
     if not a.name or not (a.control or a.rename):
         ap.error("--name and --rename are required (unless --control)")
     if a.control_strip_descriptions and not a.control:
@@ -148,20 +171,29 @@ def main(argv=None):
     cfiles, cfull = {}, {}
     try:
         sd = os.path.expanduser(a.skills_dir)
+        cd = os.path.expanduser(a.commands_dir) if a.commands_dir else os.path.join(os.path.dirname(sd.rstrip("/")), "commands")
+        if a.commands_dir and not os.path.isdir(cd):
+            raise ValueError("--commands-dir %s is not a directory" % a.commands_dir)
+        crename = None
         if a.control:
             rename = opaque_renames(sd)
         else:
             with open(a.rename) as fh:
-                rename = json.load(fh)
+                allren = json.load(fh)
+            rename = {k: v for k, v in allren.items() if os.path.exists(os.path.join(sd, k, "SKILL.md"))}
+            crename = {k: v for k, v in allren.items() if k not in rename}
+            if crename and not os.path.isdir(cd):
+                raise ValueError("no skill or command %r (no commands dir at %s)" % (sorted(crename)[0], cd))
         ov, files, back = build(sd, base, rename, a.prefix, a.state)
-        if a.control:
-            if a.control_strip_descriptions:
-                files = {k: strip_description(v) for k, v in files.items()}
-            cd = os.path.expanduser(a.commands_dir) if a.commands_dir else os.path.join(os.path.dirname(sd.rstrip("/")), "commands")
-            if os.path.isdir(cd):
-                cov, cfiles, cfull = build_commands(cd, a.state, a.control_strip_descriptions)
-                ov.update(cov)
-                back.update({new.split(":")[-1]: old for old, new in cfull.items()})
+        if a.control and a.control_strip_descriptions:
+            files = {k: strip_description(v) for k, v in files.items()}
+        if os.path.isdir(cd) and (a.control or crename):
+            cov, cfiles, cfull = build_commands(cd, a.state, a.control_strip_descriptions, crename, a.prefix)
+            ov.update(cov)
+            for old, new in cfull.items():
+                if new.split(":")[-1] in back:
+                    raise ValueError("command name %r collides with another renamed name" % new)
+                back[new.split(":")[-1]] = old
     except (OSError, ValueError) as e:
         print("make_rename_arms: %s" % e, file=sys.stderr)
         return 2
@@ -172,7 +204,8 @@ def main(argv=None):
         os.makedirs(d, exist_ok=True)
         with open(os.path.join(d, "SKILL.md"), "w") as fh:
             fh.write(text)
-    shutil.rmtree(os.path.join(cwd, ".claude", "commands"), ignore_errors=True)
+    if cfiles:
+        shutil.rmtree(os.path.join(cwd, ".claude", "commands"), ignore_errors=True)
     for rel, text in cfiles.items():
         path = os.path.join(cwd, ".claude", "commands", *rel.split("/"))
         os.makedirs(os.path.dirname(path), exist_ok=True)
@@ -182,10 +215,9 @@ def main(argv=None):
     with open(os.path.join(a.out, a.name + ".json"), "w") as fh:
         json.dump({"skillOverrides": ov}, fh, indent=2, sort_keys=True)
     with open(os.path.join(a.out, a.name + ".meta.json"), "w") as fh:
-        meta = {"cwd": cwd, "rename": back}
+        meta = {"cwd": cwd, "rename": back, "command_rename": cfull}
         if a.control:
             meta["control"] = True
-            meta["command_rename"] = cfull
         json.dump(meta, fh, indent=2, sort_keys=True)
     print("%s: %d skills renamed%s, run dir %s" % (a.name, len(back) - len(cfull), " (control)" if a.control else "", cwd))
     return 0
