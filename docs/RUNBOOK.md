@@ -255,6 +255,7 @@ Global memory loads in every session and subagent. Keep invariants there (rules 
 - Before structural claims or delegating code research, load the `code-graph` skill.
 ```
 
+- After hiding anything (`user-invocable-only` or `off`), run `python3 audit/handoff-lint.py --settings <settings.json>` to catch commands, skills, agents or CLAUDE.md that still tell the model to run a hidden one. Fix by rewording to "ask the user to type /x" or by un-hiding.
 - Set the pointed-to skill to at least `name-only`. A `user-invocable-only` skill can't be loaded by Claude.
 - Check whether an MCP server already injects the same guidance via its instructions block. Ours did.
 - Measured: one 2.4 KB block became 3 lines and saved 925 tokens per context.
