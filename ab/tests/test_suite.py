@@ -40,6 +40,11 @@ class SplitTests(unittest.TestCase):
         kit = {"id": "c", "prompt": "x", "label": "positive", "skills": ["review-pr"]}
         self.assertEqual(suite.convert(kit), kit)
 
+    def test_expected_as_list(self):
+        c = suite.convert({"id": "c", "prompt": "x", "kind": "positive", "expected": ["deploy", "ship"]})
+        self.assertEqual(c["label"], "positive")
+        self.assertEqual(c["skills"], ["deploy", "ship"])
+
     def test_split_by_skills_and_tags(self):
         splits = [("starters", {"deploy"}, set()), ("tagged", set(), {"slow"})]
         self.assertEqual(suite.split_of({"skills": ["DEPLOY"]}, splits), "starters")

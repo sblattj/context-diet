@@ -63,7 +63,8 @@ GIT_TIMEOUT = 20
 def expected_names(c):
     """Expected names of a case in either schema (kit: skills/expected_any; suite: expected/expected_any)."""
     names = list(c.get("expected_any") or [])
-    for n in ([c["expected"]] if c.get("expected") else []) + list(c.get("skills") or []):
+    exp = c.get("expected") or []
+    for n in ([exp] if isinstance(exp, str) else list(exp)) + list(c.get("skills") or []):
         if n not in names:
             names.append(n)
     return [n for n in names if n.lower() != "none"]
