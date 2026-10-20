@@ -75,6 +75,14 @@ class ControlCommandTests(unittest.TestCase):
         self.assertEqual(run.unrename(["team:dev:cmd-02", "skill-01", "cmd-01"], meta),
                          ["team:dev:context", "deploy-helper", "solo"])
 
+    def test_command_positive_not_excluded_in_control_arm(self):
+        # control arm turns the original name off and exposes the renamed one; a positive
+        # expecting the original must resolve through command_rename, not be excluded
+        self.make()
+        arm = os.path.join(self.out, "control.json")
+        case = {"label": "positive", "skills": ["team:dev:context"]}
+        self.assertFalse(run.is_excluded(case, arm))
+
     def test_original_tree_untouched(self):
         self.make("--control-strip-descriptions")
         self.assertEqual(snapshot(self.claude), self.before)

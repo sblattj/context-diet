@@ -227,13 +227,17 @@ def load_meta(arm_path):
 
 def unrename(skills, meta):
     """Map fired (possibly renamed, possibly plugin-prefixed) names back to original names."""
-    ren = meta.get("rename") or {}
+    ren = dict(meta.get("rename") or {})
+    # command renames are full namespaced names ({old full: new full}); exact match wins
+    ren.update({new: old for old, new in (meta.get("command_rename") or {}).items()})
     return [ren.get(s, s) for s in skills]
 
 
 def is_excluded(case, arm_path):
     exp = [e for e in expected_set(case) if e.lower() != "none"]
-    fwd = {old: new for new, old in (load_meta(arm_path).get("rename") or {}).items()}
+    meta = load_meta(arm_path)
+    fwd = {old: new for new, old in (meta.get("rename") or {}).items()}
+    fwd.update(meta.get("command_rename") or {})
     return (case.get("label") == "positive" and exp
             and all(arm_state(arm_path, fwd.get(s, s)) in ("user-invocable-only", "off") for s in exp))
 
