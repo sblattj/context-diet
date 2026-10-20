@@ -144,7 +144,8 @@ def main(argv=None):
     ap.add_argument("--base", required=True, help="arm .json to start from (usually your baseline arm)")
     ap.add_argument("--rename", help='JSON file {"old": "new", ...} (required unless --control)')
     ap.add_argument("--control", action="store_true",
-                    help="negative control: opaque names for every skill, state name-only, meta control=true")
+                    help="negative control: opaque names for every skill, meta control=true; state name-only "
+                         "unless --state on is given (names-only control: descriptions stay listed)")
     ap.add_argument("--commands-dir", default=None,
                     help="commands dir (default: ../commands next to --skills-dir if present; an explicit "
                          "path must exist). Needs --control or --rename")
@@ -153,15 +154,15 @@ def main(argv=None):
     ap.add_argument("--name", help="arm name (default with --control: control)")
     ap.add_argument("--out", required=True, help="arms dir")
     ap.add_argument("--prefix", default="", help="prepended to every new name")
-    ap.add_argument("--state", default="name-only", choices=["on", "name-only"])
+    ap.add_argument("--state", default=None, choices=["on", "name-only"], help="default name-only")
     ap.add_argument("--cwd", default=None, help="run dir for this arm (default: OUT/NAME.cwd)")
     a = ap.parse_args(argv)
     with open(a.base) as fh:
         base = json.load(fh).get("skillOverrides", {})
     if a.control:
         a.name = a.name or "control"
-        a.state = "name-only"
         a.prefix = ""
+    a.state = a.state or "name-only"
     if a.commands_dir and not (a.control or a.rename):
         ap.error("--commands-dir requires --control or --rename")
     if not a.name or not (a.control or a.rename):

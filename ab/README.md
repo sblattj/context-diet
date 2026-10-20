@@ -113,7 +113,11 @@ A round where nothing regresses might only mean the prompts were easy. A control
 python3 make_rename_arms.py --skills-dir ~/.claude/skills --base arms/before.json --control --out arms
 ```
 
-This writes `arms/control.json`, `arms/control.meta.json` (`"control": true`) and the renamed copies. `--name` changes the arm name. `run.py` runs it like any arm, maps fired names back, and stamps `control: true` on its records. `report.py` labels it `[control]`, skips the regression list for it, and prints a calibration line:
+This writes `arms/control.json`, `arms/control.meta.json` (`"control": true`) and the renamed copies. `--name` changes the arm name.
+
+The default control removes two signals at once: the name and the listed description. That shows the harness sees a loss, but not which signal the prompts lean on. Add `--state on --name control-on` for a names-only control (opaque names, descriptions still listed). If it keeps most of baseline recall, the prompts are matched by description and description cuts can be judged; if it collapses, the round mostly measures names. For the reverse (names kept, descriptions hidden) skip the rename and write a plain arm with every skill at `name-only`.
+
+`run.py` runs it like any arm, maps fired names back, and stamps `control: true` on its records. `report.py` labels it `[control]`, skips the regression list for it, and prints a calibration line:
 
     control control: recall 0% vs baseline 100% (harness can detect loss: yes; McNemar p = 0.03125)
 

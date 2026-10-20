@@ -45,6 +45,16 @@ class ControlArmTests(FakeClaudeCase):
         self.assertEqual(self.make("--name", "ctl2"), 0)
         self.assertTrue(os.path.exists(self.p("arms/ctl2.json")))
 
+    def test_control_state_on_keeps_descriptions_visible(self):
+        # names-only control: opaque names but listed descriptions, so loss measures name sensitivity alone
+        self.assertEqual(self.make("--state", "on", "--name", "ctlon"), 0)
+        ov = json.load(open(self.p("arms/ctlon.json")))["skillOverrides"]
+        self.assertEqual(ov, {"deploy": "off", "zeta-skill": "off", "skill-01": "on", "skill-02": "on"})
+        self.assertTrue(json.load(open(self.p("arms/ctlon.meta.json")))["control"])
+        self.assertEqual(self.make(), 0)
+        ov = json.load(open(self.p("arms/control.json")))["skillOverrides"]
+        self.assertEqual(ov["skill-01"], "name-only", "default control stays name-only")
+
     def test_requires_rename_without_control(self):
         with self.assertRaises(SystemExit):
             mra.main(["--skills-dir", self.skills, "--base", self.p("arms/base.json"), "--name", "x",
