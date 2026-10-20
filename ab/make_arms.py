@@ -45,16 +45,19 @@ def skill_name(path, fallback):
 def iter_skills(skills_dir, _prefix="", _depth=0):
     """Yield (fallback_name, file) for every skill under skills_dir.
 
-    A dir holding SKILL.md is a skill named by its dir name (skills/<name>/SKILL.md).
+    A dir holding SKILL.md is a skill named by its dir name alone, even under a namespace
+    (ns/foo/SKILL.md -> "foo", as Claude Code names skills).
     Any other dir is a namespace: .md files below it are commands named by their path
     segments joined with ":" (commands/team/dev/context.md -> "team:dev:context")."""
     if _depth > 8:
         return
     for entry in sorted(os.listdir(skills_dir)):
+        if entry.startswith("."):
+            continue
         p = os.path.join(skills_dir, entry)
         if os.path.isdir(p):
             if os.path.exists(os.path.join(p, "SKILL.md")):
-                yield _prefix + entry, os.path.join(p, "SKILL.md")
+                yield entry, os.path.join(p, "SKILL.md")
             else:
                 for item in iter_skills(p, _prefix + entry + ":", _depth + 1):
                     yield item

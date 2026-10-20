@@ -1,5 +1,6 @@
 import json
 import os
+import shutil
 import tempfile
 import unittest
 
@@ -28,6 +29,7 @@ def fm(desc, body, extra=""):
 class NestedDiscoveryTest(unittest.TestCase):
     def setUp(self):
         self.d = tempfile.mkdtemp()
+        self.addCleanup(shutil.rmtree, self.d, True)
         write(self.d, "team/dev/context.md", fm("ctx", "body"))
         write(self.d, "team/dev/review.md", fm("rev", "body"))
         write(self.d, "team/ops.md", fm("ops", "body"))
@@ -46,9 +48,46 @@ class NestedDiscoveryTest(unittest.TestCase):
         self.assertEqual(info["team:dev:context"], "ctx")
 
 
+class DiscoveryFixesTest(unittest.TestCase):
+    def setUp(self):
+        self.d = tempfile.mkdtemp()
+        self.addCleanup(shutil.rmtree, self.d, True)
+
+    def test_hidden_dirs_skipped(self):
+        write(self.d, ".git/x/notes.md", "n")
+        write(self.d, ".hidden.md", "n")
+        write(self.d, "ok.md", fm("d", "b"))
+        self.assertEqual(make_arms.discover(self.d), ["ok"])
+
+    def test_skill_dir_under_namespace_named_by_dir(self):
+        write(self.d, "ns/foo/SKILL.md", fm("d", "b"))
+        write(self.d, "ns/cmd.md", fm("d", "b"))
+        self.assertEqual(sorted(make_arms.discover(self.d)), ["foo", "ns:cmd"])
+
+
+class ParseReplyFixesTest(unittest.TestCase):
+    def test_non_list_rejected(self):
+        with self.assertRaises(ValueError):
+            synth.parse_body_reply('{"positives": "abc", "negatives": []}', 2, 1)
+        with self.assertRaises(ValueError):
+            synth.parse_body_reply('{"positives": ["a"], "negatives": "abc"}', 2, 1)
+
+    def test_plain_array_with_negatives_requested_raises(self):
+        with self.assertRaises(ValueError):
+            synth.parse_body_reply('["a", "b"]', 2, 1)
+
+    def test_plain_array_without_negatives_ok(self):
+        self.assertEqual(synth.parse_body_reply('["a", "b"]', 2, 0), (["a", "b"], []))
+
+    def test_negative_count_rejected(self):
+        with self.assertRaises(SystemExit):
+            synth.main(["c.jsonl", "--skills-dir", "x", "--model", M, "--no-selftest", "--negatives", "-1"])
+
+
 class BodyModeTest(unittest.TestCase):
     def setUp(self):
         self.d = tempfile.mkdtemp()
+        self.addCleanup(shutil.rmtree, self.d, True)
         self.sk = os.path.join(self.d, "skills")
         write(self.sk, "team/dev/context.md",
               fm(DESC, BODY, "when_to_use: %s\n" % WHEN))

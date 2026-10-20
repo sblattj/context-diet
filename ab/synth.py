@@ -86,9 +86,15 @@ def read_skill(path_dir):
 def parse_body_reply(text, n, k):
     """Return (positives, negatives) from an object reply, or (array, []) from a plain array."""
     m = re.search(r"\{.*\}", text, re.S)
-    if k and m:
+    if k:
+        if not m:
+            raise ValueError("negatives requested but reply has no JSON object: %r" % text[:200])
         obj = json.loads(m.group(0))
-        clean = lambda a, c: [s.strip() for s in (a or []) if isinstance(s, str) and s.strip()][:c]
+
+        def clean(a, c):
+            if not isinstance(a, list):
+                raise ValueError("expected a JSON list, got %r" % (a,))
+            return [s.strip() for s in a if isinstance(s, str) and s.strip()][:c]
         return clean(obj.get("positives"), n), clean(obj.get("negatives"), k)
     return parse_prompts(text, n), []
 
@@ -187,6 +193,8 @@ def main(argv=None):
     if a.selftest:
         ok, _ = selftest(a.model, a.deadline, not a.keep_api_key, a.claude_bin)
         return 0 if ok else 1
+    if a.negatives < 0:
+        ap.error("--negatives must be >= 0")
     if not a.cases or not a.skills_dir:
         ap.error("cases and --skills-dir are required (unless --selftest)")
     st_calls = 0
