@@ -8,7 +8,7 @@ S-T: every session pays a fixed "entry fee" of tokens before you type anything. 
 
 | Folder | What it does |
 |---|---|
-| `measure/` | `start_tokens.py` (real start per session from your logs, split by block), `probe-interactive.sh` (cost of one built-in tool in a real interactive session), `ablate.sh` (headless component ablation) |
+| `measure/` | `start_tokens.py` (real start per session from your logs, split by block), `kiro_footprint.py` (Kiro steering/agent footprint and live probe), `probe-interactive.sh` (cost of one built-in tool in a real interactive session), `ablate.sh` (headless component ablation) |
 | `audit/` | `skill-usage.py` (how often each skill really fired), `audit.py` (suggested `skillOverrides`), `skill-lint.py` (600-char description cap), `mcp-usage.py` (calls per MCP server, suggests `deniedMcpServers`), `size-ratchet.py` (fails when CLAUDE.md, agents or a skill listing grow past a pinned baseline), `memory-lint.py` (lint CLAUDE.md and its `@` imports for dangling pointers, import cycles and duplicated rules), `handoff-lint.py` (fail when a command or skill hidden from the model is referenced as a model handoff) |
 | `ab/` | Skill-trigger A/B: mine prompts from logs, build arms, synthesize missing positives, run, report recall / wrong pick / false fires / McNemar. Rename arms included |
 | `tools/` | `publish-artifact.sh`: publish an Artifact page from a throwaway side session so the Artifact tool can stay off |
@@ -49,6 +49,15 @@ Then follow `docs/RUNBOOK.md`: change one lever, A/B it (`ab/README.md`), keep i
 - `name-only` skills are picked by name alone. Renaming 7 opaque names to trigger-shaped ones took recall on fresh prompts from 49% to 90% (McNemar p<0.0001). A `use-this-skill-when-` prefix added nothing.
 - Built-in skills obey `skillOverrides` too.
 - "Never used" is not "never needed". Hiding 25 never-used skills in one repo cut recall on prompts written for them from 17% to 9% and saved about 100 tokens, because the listing budget refills. `audit.py` only suggests hides with `--hide`; A/B them.
+
+## Kiro
+
+```sh
+python3 measure/kiro_footprint.py WORKSPACE --home "$(mktemp -d)"      # static: steering, agent file:// resources, personal steering
+python3 measure/kiro_footprint.py WORKSPACE --live --prompt "..." --agent NAME --expect REGEX --read-pattern REGEX
+```
+
+Counts `.kiro/steering/*.md` and the `file://` `resources` of `.kiro/agents/*.json` (tokens ~chars/4), and flags a file loaded both ways as a duplicate: it is counted twice. A personal `~/.kiro/steering` silently joins every session, so it is reported separately; pass `--home` with an empty dir (the live probe uses a fresh temp HOME by default) or the output warns that the real HOME was read. The live probe needs `kiro-cli` on PATH (skipped with exit 0 otherwise), runs one headless v3 chat under a hard `--timeout`, and reports the session's contextFiles tokens, whether the answer matched, and how many tool calls touched files matching `--read-pattern`. An isolated HOME has no login: point `--home` at a prepared one if your setup needs auth.
 
 ## Hidden skill handoff lint
 
