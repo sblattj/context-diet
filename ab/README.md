@@ -82,6 +82,22 @@ python3 quick_ab.py --prompts prompts.tsv --a work/arms/before.json --b work/arm
 ```
 A run that exceeds `--deadline` or exits nonzero is left out of every count, shown as `(N err)` on its row and on an `errored runs:` summary line, and makes the exit code 2. A prompt with no ok runs in an arm is left out of McNemar. Progress lines are flushed, so you can tail a redirected output file while it runs.
 
+## Whole suite in one command (`suite.py`)
+`suite.py` wraps steps 3 to 5 for a workspace whose `.claude/skills` (and `.claude/commands`) you want to test. It builds the arms, splits the cases, plans the call count, runs `run.py` arm by arm and writes one report per split.
+```sh
+python3 suite.py --workspace ~/scratch/my-project --cases work/cases.jsonl --out work/suite-1 \
+    --model MODEL_ID --arm baseline,control --split splits.json --reps 2 --workers 2 --refuse ~/dev/my-project
+python3 suite.py ... --dry-run        # arms, splits, manifest and planned calls; no model call
+```
+- Arms: `baseline` (`{"skillOverrides":{}}` in the workspace), `control` and `control-on` (`make_rename_arms.py --control`, `--state on`), `desc-blank` (every skill and command `name-only`), or any arm `.json` you built (its `.meta.json` is copied). Control arms run in a copy of the workspace `.claude`; the workspace itself is only read.
+- Splits: optional `--split` JSON, for example `{"starters": ["deploy", "release"], "slow": {"tags": ["slow"]}}`. A case goes to the first split whose skills meet its expected names or whose tags meet its `tags`; the rest go to `headline`. Cases with `prior_turns` are skipped and listed in the manifest. Cases may use the kit schema (`label`/`skills`) or `kind`/`expected`/`expected_any`.
+- Profiles: optional `--profiles` JSON `{"stock": {"claude_args": ["--setting-sources", "project,local"], "env": {}}}`, merged into every arm meta; each profile gets its own subdir.
+- Output: `manifest.json` (kit sha, workspace sha, cases sha256, counts, planned calls, runner snapshot), `progress.log`, `results-<split>.jsonl`, `report-<split>.txt|json`.
+- Bounds and resume: per-call `--deadline`; the run stops with exit 4 when an arm's errors exceed `--max-error-rate` (default 0.2) of its finished calls. Re-run the same command on the same `--out` to resume: finished keys are skipped, errored keys retried.
+- Snapshot: run as a script, `suite.py` copies `ab/*.py` to a private temp dir and re-executes from there, so editing the kit mid-run cannot change a live run. The manifest records the snapshot path and `runner_sha256`; the snapshot is removed on exit.
+
+Tests: `ab/tests/test_suite.py` (the fake `claude`; no network).
+
 ## Cost notes
 
 Runs = cases x arms x reps. The issue's reference run (98 cases, 2 arms, 2 reps) was 448 runs per round on Sonnet. A run is about 1 to 2 model turns with a start context of roughly 17k to 36k tokens depending on your setup, so budget accordingly; try `--limit 10 --reps 1` first. Filtering is 1 model call per 25 candidates. `--model` picks the model for every step; keep `--workers` low enough to stay under rate limits.
