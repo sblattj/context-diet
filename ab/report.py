@@ -219,9 +219,9 @@ def skill_rates(recs, rule="majority"):
     return by
 
 
-def paired_noninferiority(b, c, n, margin_pp=DEFAULT_MARGIN_PP):
+def paired_noninferiority(b, c, n, margin_pp=DEFAULT_MARGIN_PP, z=Z95_ONE_SIDED):
     """Paired difference (candidate - baseline) over n prompts with b = baseline-only hits and
-    c = candidate-only hits. One-sided 95% bounds from the paired variance (normal approximation,
+    c = candidate-only hits. One-sided 95% bounds (or the z given) from the paired variance (normal approximation,
     with one pseudo-discordant pair so zero observed discordance is not read as zero variance).
     Returns dict(diff_pp, lower_pp, upper_pp, margin_pp, verdict)."""
     if n == 0:
@@ -229,7 +229,7 @@ def paired_noninferiority(b, c, n, margin_pp=DEFAULT_MARGIN_PP):
                 "margin_pp": margin_pp, "verdict": "inconclusive"}
     d = (c - b) / n
     se = math.sqrt(max((b + c + 1) / n - d * d, 0.0) / n)  # +1 discordant keeps se > 0 when b = c = 0
-    lo, hi = 100 * (d - Z95_ONE_SIDED * se), 100 * (d + Z95_ONE_SIDED * se)
+    lo, hi = 100 * (d - z * se), 100 * (d + z * se)
     verdict = "non-inferior" if lo > -margin_pp else "inferior" if hi < -margin_pp else "inconclusive"
     return {"diff_pp": 100 * d, "lower_pp": lo, "upper_pp": hi, "margin_pp": margin_pp, "verdict": verdict}
 

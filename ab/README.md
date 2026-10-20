@@ -74,6 +74,29 @@ Per arm: recall (all / implicit), wrong-skill rate, fire rate on negatives, medi
 
 With fewer than 2 paired cases the line reads `n/a (k paired cases)`. The same numbers are under `savings.<arm>` in `--json` output.
 
+## Is this cut safe? (`noninferiority.py`)
+
+`report.py` describes a round; `noninferiority.py` decides one. It pairs a baseline and a candidate row by `(case, rep)` (two results files, or one file with both arms split by `--arm-field`, default `arm`), drops `--exclude-cases` (a frozen floor list), and splits expected skills into visible and hidden (`--commands-dir` scans for `disable-model-invocation: true`; `--hidden`/`--hidden-file` name them directly).
+
+```sh
+python3 noninferiority.py work/base.jsonl work/slim.jsonl --commands-dir .claude/commands --exclude-cases floor.txt
+python3 noninferiority.py work/results.jsonl --base-arm before --arm after --rule rule.json --rule-sha256 HEX --json
+```
+
+Default rule: KEEP iff the `recall_visible` paired delta has a 95% CI lower bound >= -5 pp and neither `wrong_pick` nor `false_fire` is worse beyond its CI (the lower bound of the increase stays <= 0). `--decide`, `--margin-pp`, `--harm-margin-pp`, `--alpha`, `--sides` and `--cluster` change it; `recall_pure_visible` and `recall_mixed` are shown but never decide unless the rule names them, so there is no post-hoc subsetting. Recall is scored conservatively: the baseline hits on any expected skill, the candidate only on a visible one. Output is a text table or a `--json` verdict `{keep, reasons, warnings, metrics: {name: {delta_pp, ci_pp, n, base, arm, discordant, mcnemar_p, pass, decides}}, n, rule, ...}` plus median start tokens and the same savings CI as `report.py`. Exit 0 keep, 1 park, 2 error.
+
+**Pre-registration.** Write the rule before the data:
+
+```json
+{"alpha": 0.05, "sides": 2, "cluster": "case",
+ "metrics": {"recall_visible": {"margin_pp": 5}, "wrong_pick": {}, "false_fire": {}},
+ "exclude_cases": ["c07"], "hidden": ["tools:deploy"]}
+```
+
+Record `shasum -a 256 rule.json` with the plan. `--rule` stamps `rule_sha256` into the output, refuses flags the file fixes, and `--rule-sha256 HEX` turns any later edit into `keep: false`, exit 2.
+
+**Method.** The CI is the normal approximation on the paired difference with a case-clustered (sandwich) standard error, because reps of one prompt are correlated and treating them as independent pairs makes the interval too narrow; at 300 to 500 pairs this is accurate once there are about 10 or more discordant pairs, and a bootstrap would not fix the sparse-discordance case anyway. Below 10 discordant pairs the verdict carries a warning, and a zero variance falls back to one pseudo-discordant pair so a CI is never zero-width. This is a different unit from `report.py`'s prompt-level non-inferiority line (reps aggregated first), so the two can differ slightly.
+
 ## Quick version
 
 `quick_ab.py` is the single-file check for hand-written prompts (`skill<TAB>prompt` per line) and two settings files:
