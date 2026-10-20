@@ -152,8 +152,39 @@ def parse_stream(text):
     return {"final": final, "context_tokens": ctx, "items": items, "calls": list(calls.values())}
 
 
+# kiro-cli keeps its login under the platform data dir and resolves its helper binaries
+# (kiro-cli-chat) from ~/.local/bin, both relative to HOME. An empty HOME therefore has no
+# login and kiro waits until the timeout. Link only these into the isolated HOME, never ~/.kiro.
+AUTH_PATHS = (os.path.join("Library", "Application Support", "kiro-cli"),
+              os.path.join(".local", "share", "kiro-cli"))
+
+
+def seed_home(home, real_home):
+    """Symlink kiro-cli's login data and helper binaries from real_home into home.
+    Existing entries in home are left alone. Returns the relative paths linked."""
+    linked = []
+    for rel in AUTH_PATHS:
+        src, dst = os.path.join(real_home, rel), os.path.join(home, rel)
+        if os.path.isdir(src) and not os.path.lexists(dst):
+            os.makedirs(os.path.dirname(dst), exist_ok=True)
+            os.symlink(src, dst)
+            linked.append(rel)
+    bindir = os.path.join(real_home, ".local", "bin")
+    if os.path.isdir(bindir):
+        for name in sorted(os.listdir(bindir)):
+            if not name.startswith("kiro-cli"):
+                continue
+            rel = os.path.join(".local", "bin", name)
+            dst = os.path.join(home, rel)
+            if not os.path.lexists(dst):
+                os.makedirs(os.path.dirname(dst), exist_ok=True)
+                os.symlink(os.path.join(bindir, name), dst)
+                linked.append(rel)
+    return linked
+
+
 def live_probe(workspace, prompt, agent=None, home=None, timeout=240, kiro_bin="kiro-cli",
-               expect=None, read_pattern=None):
+               expect=None, read_pattern=None, link_auth=True, real_home=None):
     """Returns a dict; {"skipped": reason} when kiro-cli is missing."""
     exe = shutil.which(kiro_bin)
     if not exe:
@@ -162,6 +193,7 @@ def live_probe(workspace, prompt, agent=None, home=None, timeout=240, kiro_bin="
     if home is None:
         tmp = tempfile.mkdtemp(prefix="kiro-home-")
         home = tmp
+    linked = seed_home(home, real_home or os.path.expanduser("~")) if link_auth else []
     cmd = [exe, "chat", "--v3"] + (["--agent", agent] if agent else []) + [
         "--output-format", "stream-json", "--no-interactive", "--trust-all-tools", prompt]
     env = dict(os.environ, HOME=home)
@@ -169,12 +201,14 @@ def live_probe(workspace, prompt, agent=None, home=None, timeout=240, kiro_bin="
         try:
             r = subprocess.run(cmd, cwd=workspace, env=env, capture_output=True, text=True, timeout=timeout)
         except subprocess.TimeoutExpired:
-            return {"error": "timeout after %ss" % timeout, "home": home}
+            hint = "" if linked else " (no kiro login linked into HOME; drop --bare-home or log in there)"
+            return {"error": "timeout after %ss%s" % (timeout, hint), "home": home}
         except OSError as e:
             return {"error": str(e), "home": home}
         p = parse_stream(r.stdout)
         p["returncode"] = r.returncode
         p["home"] = home
+        p["linked"] = linked
         if expect is not None:
             p["answer_ok"] = bool(re.search(expect, p["final"], re.I | re.S))
         if read_pattern is not None:
@@ -198,6 +232,8 @@ def main(argv=None):
     ap.add_argument("--read-pattern")
     ap.add_argument("--timeout", type=int, default=240)
     ap.add_argument("--kiro-bin", default="kiro-cli")
+    ap.add_argument("--bare-home", action="store_true",
+                    help="do not link kiro-cli login data and binaries into the isolated HOME")
     a = ap.parse_args(argv)
     ws = os.path.abspath(a.workspace)
     if not a.live:
@@ -207,7 +243,8 @@ def main(argv=None):
     if not a.prompt:
         print("--live needs --prompt", file=sys.stderr)
         return 2
-    res = live_probe(ws, a.prompt, a.agent, a.home, a.timeout, a.kiro_bin, a.expect, a.read_pattern)
+    res = live_probe(ws, a.prompt, a.agent, a.home, a.timeout, a.kiro_bin, a.expect, a.read_pattern,
+                     link_auth=not a.bare_home)
     if "skipped" in res:
         print("SKIP: " + res["skipped"])
         return 0

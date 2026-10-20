@@ -111,7 +111,8 @@ class LiveTests(unittest.TestCase):
         os.environ.update(self._env)
 
     def test_probe_parses_and_isolates_home(self):
-        r = kf.live_probe(self.ws, "what color?", agent="dev", expect="teal", read_pattern=r"settings\.yaml")
+        r = kf.live_probe(self.ws, "what color?", agent="dev", expect="teal", read_pattern=r"settings\.yaml",
+                          real_home=self.out)
         self.assertEqual(r["context_tokens"], 321)
         self.assertTrue(r["answer_ok"])
         self.assertEqual(r["file_reads"], 1)
@@ -125,13 +126,36 @@ class LiveTests(unittest.TestCase):
         self.assertIn("--agent dev", args)
 
     def test_wrong_answer(self):
-        r = kf.live_probe(self.ws, "q", expect="purple")
+        r = kf.live_probe(self.ws, "q", expect="purple", real_home=self.out)
         self.assertFalse(r["answer_ok"])
 
     def test_timeout(self):
         os.environ["FAKE_SLEEP"] = "5"
-        r = kf.live_probe(self.ws, "q", timeout=1)
+        r = kf.live_probe(self.ws, "q", timeout=1, real_home=self.out)
         self.assertIn("timeout", r["error"])
+
+    def test_seed_home_links_login_not_steering(self):
+        real = os.path.join(self.tmp, "realhome")
+        auth = os.path.join(real, "Library", "Application Support", "kiro-cli")
+        os.makedirs(auth)
+        write(os.path.join(auth, "data.sqlite3"), "x")
+        write(os.path.join(real, ".local", "bin", "kiro-cli-chat"), "#!/bin/sh\n")
+        write(os.path.join(real, ".local", "bin", "other-tool"), "#!/bin/sh\n")
+        write(os.path.join(real, ".kiro", "steering", "personal.md"), "personal notes")
+        iso = os.path.join(self.tmp, "iso")
+        os.makedirs(iso)
+        linked = kf.seed_home(iso, real)
+        self.assertTrue(os.path.exists(os.path.join(iso, "Library", "Application Support", "kiro-cli", "data.sqlite3")))
+        self.assertTrue(os.path.islink(os.path.join(iso, ".local", "bin", "kiro-cli-chat")))
+        self.assertFalse(os.path.lexists(os.path.join(iso, ".local", "bin", "other-tool")))
+        self.assertFalse(os.path.lexists(os.path.join(iso, ".kiro")))
+        self.assertEqual(kf.seed_home(iso, real), [])  # idempotent
+        self.assertEqual(len(linked), 2)
+
+    def test_bare_home_timeout_hints_at_login(self):
+        os.environ["FAKE_SLEEP"] = "5"
+        r = kf.live_probe(self.ws, "q", timeout=1, link_auth=False)
+        self.assertIn("no kiro login", r["error"])
 
     def test_skipped_without_kiro(self):
         os.environ["PATH"] = self.out  # no kiro-cli here
