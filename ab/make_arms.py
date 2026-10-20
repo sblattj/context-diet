@@ -7,8 +7,9 @@ never depend on ambient defaults. Output: one `<arm>.json` per arm, shaped
 
 States: on | name-only | user-invocable-only | off
 
-Skill discovery: every immediate subdirectory containing SKILL.md (name taken
-from frontmatter `name:`, else the directory name) and every top-level *.md.
+Skill discovery: every subdirectory containing SKILL.md (name taken from frontmatter
+`name:`, else the directory name) and every *.md, including nested command trees:
+commands/team/dev/context.md is named "team:dev:context" (path segments joined by ":").
 
 Example:
   make_arms.py --skills-dir ~/.claude/skills --out arms \\
@@ -41,15 +42,28 @@ def skill_name(path, fallback):
     return fallback
 
 
-def discover(skills_dir):
-    names = []
+def iter_skills(skills_dir, _prefix="", _depth=0):
+    """Yield (fallback_name, file) for every skill under skills_dir.
+
+    A dir holding SKILL.md is a skill named by its dir name (skills/<name>/SKILL.md).
+    Any other dir is a namespace: .md files below it are commands named by their path
+    segments joined with ":" (commands/team/dev/context.md -> "team:dev:context")."""
+    if _depth > 8:
+        return
     for entry in sorted(os.listdir(skills_dir)):
         p = os.path.join(skills_dir, entry)
-        if os.path.isdir(p) and os.path.exists(os.path.join(p, "SKILL.md")):
-            names.append(skill_name(os.path.join(p, "SKILL.md"), entry))
+        if os.path.isdir(p):
+            if os.path.exists(os.path.join(p, "SKILL.md")):
+                yield _prefix + entry, os.path.join(p, "SKILL.md")
+            else:
+                for item in iter_skills(p, _prefix + entry + ":", _depth + 1):
+                    yield item
         elif os.path.isfile(p) and entry.endswith(".md") and entry.lower() != "readme.md":
-            names.append(skill_name(p, entry[:-3]))
-    return names
+            yield _prefix + entry[:-3], p
+
+
+def discover(skills_dir):
+    return [skill_name(f, fallback) for fallback, f in iter_skills(skills_dir)]
 
 
 def load_base(path):
