@@ -95,7 +95,9 @@ Default rule: KEEP iff the `recall_visible` paired delta has a 95% CI lower boun
 
 Record `shasum -a 256 rule.json` with the plan. `--rule` stamps `rule_sha256` into the output, refuses flags the file fixes, and `--rule-sha256 HEX` turns any later edit into `keep: false`, exit 2.
 
-**Method.** The CI is the normal approximation on the paired difference with a case-clustered (sandwich) standard error, because reps of one prompt are correlated and treating them as independent pairs makes the interval too narrow; at 300 to 500 pairs this is accurate once there are about 10 or more discordant pairs, and a bootstrap would not fix the sparse-discordance case anyway. Below 10 discordant pairs the verdict carries a warning, and a zero variance falls back to one pseudo-discordant pair so a CI is never zero-width. This is a different unit from `report.py`'s prompt-level non-inferiority line (reps aggregated first), so the two can differ slightly.
+**Method.** The CI is the normal approximation on the paired difference with a case-clustered (sandwich) standard error, because reps of one prompt are correlated and independent-pair errors come out too narrow. At 300 to 500 pairs this is accurate above about 10 discordant pairs and a bootstrap would not fix sparse discordance, so below 10 the verdict warns and a zero variance falls back to one pseudo-discordant pair.
+
+The default is two-sided 95% (z 1.96, matching the rule above), while `report.py`'s non-inferiority line is one-sided (z 1.645) at the prompt level after rep aggregation, so their bounds differ. `--exclude-cases` and `--commands-dir` given beside a `--rule` without those keys are allowed and not covered by the sha; the resolved `hidden` and `excluded_cases` lists are in the output for audit.
 
 ## Quick version
 
