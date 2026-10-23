@@ -126,27 +126,26 @@ On our setup, 30 days showed 17 visible skills never used and 13 more used once 
 
 Biggest single win. A custom agent type with a short tool allowlist skips built-in schemas, MCP and the skills listing. Ours starts at 9.6k vs ~43k for the old workflow subagent. That 9.6k assumes a small CLAUDE.md: global memory loads into every subagent, lean ones included, so your CLAUDE.md adds on top. On a second setup a lean subagent started at 19.7k with a 36k-byte CLAUDE.md, and at 14.1k after trimming it to 19.5k bytes (step 10). Copy `agents/lean.md` to `~/.claude/agents/lean.md`:
 
-```markdown
----
-name: lean
-description: Low-context worker for workflow fan-out and mechanical tasks. Only shell and file tools, no skills, MCP or publishing. Use when a subagent just needs to read, grep, edit or run commands.
-tools:
-  - Bash
-  - Read
-  - Edit
-  - Write
-  - Grep
-  - Glob
----
+It lists `Bash, Read, Edit, Write, Grep, Glob, WebSearch, WebFetch`, no `Skill` (so no skills listing) and no MCP tools, plus a short prompt that keeps the agent on its one task.
 
-You are a focused worker. Do the task with shell and file tools only, then return the result as your final message.
-```
+What each tool group costs, measured on one setup (one subagent per variant from a fresh `claude -p` session, first-turn input read from `subagents/agent-*.jsonl`; the absolute level includes that setup's CLAUDE.md, the deltas are what matter):
+
+| Variant | Start tokens | Tools the agent reports |
+|---|---|---|
+| Bash, Read, Edit, Write | 14,920 (x2) | those four |
+| + Grep, Glob | 14,920 (x2) | the same four |
+| + WebFetch (control) | 15,358 | + WebFetch |
+| + WebSearch, WebFetch | 15,796 | + WebSearch, WebFetch |
+
+- **Grep and Glob can be no-ops.** Builds that ship bundled search replace the Grep and Glob tools with `grep`/`find` shell functions that run the bundled ugrep/bfs inside Bash. On those builds the two names are silently dropped: zero tokens, zero tools. They stay in the file for builds that still have the tools. Check yours with `type grep` in a Bash call.
+- **Web tools cost about 0.9k per spawn.** That is cheap enough to keep one lean type for both file work and web research instead of two.
+
 
 Then make it the default in your global CLAUDE.md:
 
 ```markdown
 - Default fan-out to the low-context `lean` agent (`subagent_type: lean`, `agentType: 'lean'` in workflows):
-  shell + file tools only, about 10k tokens at start vs 35k to 43k. Use a heavier type only when the agent needs MCP, skills, web or publishing.
+  shell, file and web tools, about 10k tokens at start vs 35k to 43k. Use a heavier type only when the agent needs MCP, skills or publishing.
 ```
 
 A new agent type isn't loaded into the session that created it. Start a new session.

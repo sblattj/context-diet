@@ -12,7 +12,7 @@ S-T: every session pays a fixed "entry fee" of tokens before you type anything. 
 | `audit/` | `skill-usage.py` (how often each skill really fired), `audit.py` (suggested `skillOverrides`), `skill-lint.py` (600-char description cap), `mcp-usage.py` (calls per MCP server, suggests `deniedMcpServers`), `size-ratchet.py` (fails when CLAUDE.md, agents or a skill listing grow past a pinned baseline), `memory-lint.py` (lint CLAUDE.md and its `@` imports for dangling pointers, import cycles and duplicated rules), `handoff-lint.py` (fail when a command or skill hidden from the model is referenced as a model handoff) |
 | `ab/` | Skill-trigger A/B: mine prompts from logs, build arms, synthesize missing positives, run, report recall / wrong pick / false fires / McNemar. Rename arms included |
 | `tools/` | `publish-artifact.sh`: publish an Artifact page from a throwaway side session so the Artifact tool can stay off |
-| `agents/lean.md` | A low-context subagent (shell + file tools only) for fan-out work |
+| `agents/lean.md` | A low-context subagent (shell, file and web tools; no skills or MCP) for fan-out work |
 | `skills/` | Plugin skills that point Claude at the above |
 | `docs/` | `RUNBOOK.md` (the full method) and `CONTEXT-DIET.md` |
 

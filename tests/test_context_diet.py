@@ -306,7 +306,7 @@ class LeanAgentTests(unittest.TestCase):
         sk = skill_meta.read_skill(os.path.join(KIT, "agents", "lean.md"))
         self.assertEqual(sk["meta"]["name"], "lean")
         tools = [t.strip() for t in sk["meta"]["tools"].split(",")]
-        self.assertEqual(tools, ["Bash", "Read", "Edit", "Write", "Grep", "Glob"])
+        self.assertEqual(tools, ["Bash", "Read", "Edit", "Write", "Grep", "Glob", "WebSearch", "WebFetch"])
         self.assertNotIn("Skill", tools)
         self.assertLessEqual(skill_meta.listing_length(sk["meta"]), 600)
 

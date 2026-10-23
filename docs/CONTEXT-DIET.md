@@ -7,7 +7,7 @@ Every Claude Code session and subagent pays a startup cost before it does any wo
 | `measure/ablate.sh` | How many tokens does each component (skills, MCP, instructions, tool set) add to startup? |
 | `audit/skill-usage.py` | Which skills are actually used, and which can be hidden or trimmed? |
 | `audit/skill-lint.py` | Which skills have a `description` + `when_to_use` over the 600-character cap? |
-| `agents/lean.md` | A subagent with a 6-tool allowlist and nothing else loaded. |
+| `agents/lean.md` | A subagent with shell, file and web tools and nothing else loaded. |
 
 ## Measure startup context: `ablate.sh`
 
@@ -86,7 +86,7 @@ Exits 0 when clean, 1 when any skill's `description` + `when_to_use` exceeds the
 
 ## Lean subagent: `agents/lean.md`
 
-A subagent definition with the tools `Bash, Read, Edit, Write, Grep, Glob` and a short prompt. Copy it to `.claude/agents/lean.md` (project) or `~/.claude/agents/lean.md` (user) and use it as the default agent type for workflow fan-out. A custom subagent with a six-tool allowlist started at about 9.6k tokens against roughly 43k for the default. It has no `Skill` tool, so it gets no skills listing, and no MCP tools. Do not use it for tasks that need either.
+A subagent definition with the tools `Bash, Read, Edit, Write, Grep, Glob, WebSearch, WebFetch` and a short prompt. Copy it to `.claude/agents/lean.md` (project) or `~/.claude/agents/lean.md` (user) and use it as the default agent type for workflow fan-out. A custom subagent with a six-tool allowlist (before web tools were added, about +0.9k) started at about 9.6k tokens against roughly 43k for the default. It has no `Skill` tool, so it gets no skills listing, and no MCP tools. Do not use it for tasks that need either.
 
 ## Tests
 
